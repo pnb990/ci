@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Lints and tests the python tooling of a repository. No firmware is built
+# here, so the toolchain image is not needed and the much smaller python3 one
+# is used instead.
+#
+# This is the single copy of what used to be `lint-reuse.yaml` and
+# `test-python.yaml`, duplicated in four projects. The two files described the
+# same environment -- same image, same checkout, same `uv sync` -- and differed
+# only in their last step, so they are merged here into one job. The cost is
+# one result in the run list instead of two; the gain is that a project can no
+# longer end up, as two of them had, with a green `test-python` that lints
+# nothing.
+#
+# Callers keep their own trigger and their own image pin; see README.md.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the python3 image, pinned to a commit tag. Stays in
+          the calling project: a pin is a commit in the repository it protects.
+        type: string
+        required: true
+      test:
+        description: >-
+          Test command, run last, inside the image, after the linters. Empty
+          means the project has no test step. This is the one legitimate
+          per-project variation.
+        type: string
+        default: ""
+      submodules:
+        description: >-
+          Passed to actions/checkout. `recursive` is what a path dependency on
+          a sibling library needs; `false` for a project without submodules.
+        type: string
+        default: "recursive"
+
+jobs:
+  python-checks:
+    # node for the JavaScript actions, git, uv and the `file` command that
+    # reuse needs for libmagic all come from the image, built by
+    # soft-lib/docker-images. Pinned to a commit tag by the caller, not to
+    # `ci-latest`: a workflow that gates a push must not be able to break on a
+    # commit that has nothing to do with it. Bumping the pin is a reviewable
+    # commit in the project, rolling back is a git revert, and
+    # check-image-bump.yaml is what says when the bump is safe.
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+    steps:
+      # The tag is already the commit here, but the stamp is what proves the
+      # image really is that build, and it is the same step as in
+      # check-image-bump.yaml, where the tag floats. The `||` covers the
+      # images built before the stamp was introduced.
+      - name: Image provenance
+        run: cat /etc/pnb-image 2>/dev/null || echo "unstamped image"
+
+      - name: Checkout the repo
+        uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      # --frozen, so a stale uv.lock fails the run instead of silently
+      # resolving to something else. --dev, because the linters below are dev
+      # dependencies and `uv sync` alone would not install them.
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      # One step per tool, where a python script (tests/test.py) used to drive
+      # all of them through unittest. That script predates this CI; now that
+      # the CI exists, running the tools directly means a red job names what
+      # broke, and each tool reads its own configuration instead of a
+      # hand-written file list.
+      #
+      # ruff replaces pycodestyle, which could not be configured from
+      # pyproject.toml at all -- it only reads setup.cfg / tox.ini, so the
+      # ignore list projects carried under [tool.black] was read by nobody and
+      # E203 fired on every slice black had formatted.
+      - name: Lint
+        run: uv run ruff check .
+
+      # Nothing here duplicates the step above: ruff check leaves out the rules
+      # that would disagree with the formatter, and the formatter owns the
+      # layout. `ruff format` replaced black, whose output it matches, so
+      # line-length is now written once, under [tool.ruff].
+      - name: Check formatting
+        run: uv run ruff format --check --diff .
+
+      # What ruff does not cover: design rules, docstrings, dead code across
+      # modules. --recursive because it is given a tree, not a file list; the
+      # exclusions live in pyproject.toml, next to ruff's.
+      - name: Coding rules
+        run: uv run pylint --recursive=y .
+
+      # `uv run`, not `uvx`: reuse is a dependency of the calling project, so
+      # the version that lints here is the one pinned in its uv.lock and the
+      # one a developer gets locally.
+      - name: Check REUSE compliance
+        run: uv run reuse lint
+
+      # Last, so a failing test is read against an already-linted tree.
+      - name: Run tests
+        if: inputs.test != ''
+        run: ${{ inputs.test }}
