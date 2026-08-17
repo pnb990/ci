@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Checks REUSE compliance -- that every file in the tree declares a copyright
+# and a licence.
+#
+# This is deliberately its own workflow rather than a step of
+# python-checks.yaml, for two reasons:
+#
+#   - REUSE is about licence headers, not about python. A firmware project, a
+#     documentation repository, anything with files in it has headers to check,
+#     and none of those can be asked to carry ruff, pylint and a uv.lock just to
+#     get the check.
+#   - A job is what shows up in the run list. Folded into python-checks, the
+#     REUSE result was invisible: you could no longer see, from the list, that
+#     the check had run at all. Worse, steps stop at the first failure, so a
+#     ruff error hid the REUSE verdict until it was fixed.
+#
+# The two workflows still share the image and the checkout, which is the
+# duplication that mattered -- what they do not share is a reason to fail
+# together.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image, pinned to a commit tag. Stays in the
+          calling project: a pin is a commit in the repository it protects.
+          Any image with uv in it will do; reuse needs nothing else.
+        type: string
+        required: true
+      submodules:
+        description: >-
+          Passed to actions/checkout. `recursive` is what a path dependency on
+          a sibling library needs; `false` for a project without submodules.
+          Note that REUSE only ever lints this repository -- a submodule is a
+          separate repository and answers for its own headers.
+        type: string
+        default: "recursive"
+      pinned:
+        description: >-
+          Where the `reuse` tool comes from. `true`, the default, syncs the
+          project and runs the version pinned in its uv.lock, so that CI and a
+          developer's machine cannot disagree. `false` runs it through `uvx`
+          instead, for a project that has no python environment to pin it in --
+          which is the whole point of this workflow being separate.
+        type: boolean
+        default: true
+
+jobs:
+  lint-reuse:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+    steps:
+      # The tag is already the commit here, but the stamp is what proves the
+      # image really is that build, and it is the same step as in
+      # check-image-bump.yaml, where the tag floats. The `||` covers the images
+      # built before the stamp was introduced.
+      - name: Image provenance
+        run: cat /etc/pnb-image 2>/dev/null || echo "unstamped image"
+
+      - name: Checkout the repo
+        uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      # --frozen, so a stale uv.lock fails the run instead of silently
+      # resolving to something else. --dev, because reuse is a dev dependency
+      # and `uv sync` alone would not install it.
+      - name: Install dependencies
+        if: inputs.pinned
+        run: uv sync --dev --frozen
+
+      # `uv run`, so the version that lints here is the one pinned in the
+      # caller's uv.lock and the one a developer gets locally.
+      - name: Check REUSE compliance
+        if: inputs.pinned
+        run: uv run reuse lint
+
+      # The unpinned path, for a project with no python environment. `uvx`
+      # resolves reuse at run time, so this job can report a failure the day
+      # reuse changes what it considers compliant -- accepted knowingly: the
+      # alternative is no REUSE check at all on those projects.
+      - name: Check REUSE compliance (unpinned)
+        if: ${{ !inputs.pinned }}
+        run: uvx reuse lint
