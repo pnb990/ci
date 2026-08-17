@@ -8,13 +8,13 @@
 # here, so the toolchain image is not needed and the much smaller python3 one
 # is used instead.
 #
-# This is the single copy of what used to be `lint-reuse.yaml` and
-# `test-python.yaml`, duplicated in four projects. The two files described the
-# same environment -- same image, same checkout, same `uv sync` -- and differed
-# only in their last step, so they are merged here into one job. The cost is
-# one result in the run list instead of two; the gain is that a project can no
-# longer end up, as two of them had, with a green `test-python` that lints
-# nothing.
+# This is the single copy of what used to be `test-python.yaml`, duplicated in
+# four projects -- two of which ran no linter at all under that name, which is
+# what this workflow exists to make impossible.
+#
+# The REUSE check is *not* here: it lives in lint-reuse.yaml, as its own job.
+# See the comment at the top of that file for why -- in short, licence headers
+# are not a python matter, and a job is what is visible in the run list.
 #
 # Callers keep their own trigger and their own image pin; see README.md.
 
@@ -97,12 +97,6 @@ jobs:
       # exclusions live in pyproject.toml, next to ruff's.
       - name: Coding rules
         run: uv run pylint --recursive=y .
-
-      # `uv run`, not `uvx`: reuse is a dependency of the calling project, so
-      # the version that lints here is the one pinned in its uv.lock and the
-      # one a developer gets locally.
-      - name: Check REUSE compliance
-        run: uv run reuse lint
 
       # Last, so a failing test is read against an already-linted tree.
       - name: Run tests

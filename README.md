@@ -38,6 +38,24 @@ jobs:
       test: pytest tests
 ```
 
+## One workflow, one job, one line in the run list
+
+The workflows here are deliberately *not* merged into a single job, even where
+they share an image and a checkout. A job is the unit the run list shows, so
+folding a check into another one hides it: you can no longer see that it ran.
+And steps stop at the first failure, so a merged job lets one tool's error mask
+another tool's verdict.
+
+`lint-reuse.yaml` is the case that settled it. REUSE checks licence headers,
+which is not a python matter — a firmware or documentation project has headers
+too, and cannot be asked to carry ruff, pylint and a `uv.lock` to get the
+check. It therefore stays a workflow of its own, callable from anything, with a
+`pinned: false` mode for a project with no python environment at all.
+
+The duplication that mattered — the image, the provenance stamp, the recursive
+checkout, the `uv sync` — is shared all the same, because it is shared *here*,
+once, rather than by merging the jobs in the caller.
+
 ## Pinning
 
 Everything is pinned by **commit sha**, never by branch or floating tag, and
@@ -54,7 +72,11 @@ there and rolling it back is a `git revert` there.
 
 | Workflow | Replaces | Inputs |
 |---|---|---|
-| `python-checks.yaml` | `lint-reuse.yaml` + `test-python.yaml` | `image` (required), `test`, `submodules` |
+| `python-checks.yaml` | `test-python.yaml` | `image` (required), `test`, `submodules` |
+| `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
+
+A python project calls both, and gets the two results it had before. A project
+with no python calls only `lint-reuse.yaml`, with `pinned: false`.
 
 Planned, not written yet: `fw-build.yaml`, sharing the *environment* of a
 firmware build (image, provenance, recursive checkout, `uv sync`,
