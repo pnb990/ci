@@ -66,11 +66,21 @@ jobs:
         with:
           submodules: ${{ inputs.submodules }}
 
-      # --frozen, so a stale uv.lock fails the run instead of silently
-      # resolving to something else. --dev, because the linters below are dev
-      # dependencies and `uv sync` alone would not install them.
+      # --locked, not --frozen. Both install exactly what uv.lock says; the
+      # difference is what they do when the lock no longer matches
+      # pyproject.toml. --frozen does not look at pyproject.toml at all, so it
+      # installs the stale lock and says nothing -- which is what happened in
+      # pnbchrono, whose lock still listed black and pycodestyle months after
+      # the migration to ruff, while the comment that stood here claimed
+      # --frozen was what made that fail. --locked asserts the lock is up to
+      # date and fails the run when it is not.
+      #
+      # A red job here means one command: `uv lock`, then commit the result.
+      #
+      # --dev, because the linters below are dev dependencies and `uv sync`
+      # alone would not install them.
       - name: Install dependencies
-        run: uv sync --dev --frozen
+        run: uv sync --dev --locked
 
       # One step per tool, where a python script (tests/test.py) used to drive
       # all of them through unittest. That script predates this CI; now that

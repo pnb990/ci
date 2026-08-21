@@ -69,12 +69,15 @@ jobs:
         with:
           submodules: ${{ inputs.submodules }}
 
-      # --frozen, so a stale uv.lock fails the run instead of silently
-      # resolving to something else. --dev, because reuse is a dev dependency
-      # and `uv sync` alone would not install it.
+      # --locked, not --frozen: --frozen installs a lock that no longer
+      # matches pyproject.toml without a word, --locked fails the run. See the
+      # longer note on the same step in python-checks.yaml.
+      #
+      # --dev, because reuse is a dev dependency and `uv sync` alone would not
+      # install it.
       - name: Install dependencies
         if: inputs.pinned
-        run: uv sync --dev --frozen
+        run: uv sync --dev --locked
 
       # `uv run`, so the version that lints here is the one pinned in the
       # caller's uv.lock and the one a developer gets locally.
