@@ -74,14 +74,22 @@ there and rolling it back is a `git revert` there.
 |---|---|---|
 | `python-checks.yaml` | `test-python.yaml` | `image` (required), `test`, `submodules` |
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
+| `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 
-A python project calls both, and gets the two results it had before. A project
-with no python calls only `lint-reuse.yaml`, with `pinned: false`.
+A python project calls the first two, and gets the two results it had before. A
+project with no python calls only `lint-reuse.yaml`, with `pinned: false`.
 
-Planned, not written yet: `fw-build.yaml`, sharing the *environment* of a
-firmware build (image, provenance, recursive checkout, `uv sync`,
-`TOOLCHAIN_STM32_DIR`) while the build command and the matrix source stay in
-the project — that is where make and cmake diverge.
+`fw-build.yaml` shares the *scaffolding* of a firmware build — image,
+provenance stamp, recursive checkout, `uv sync`, the optional artifact — while
+the build command comes in as an input, and the matrix with the `prepare` job
+that computes it stays in the project. That is where make and cmake genuinely
+diverge, and it is the line this repository does not cross.
+
+The build command carries its own environment: exporting
+`TOOLCHAIN_STM32_DIR="$ARM_TOOLCHAIN_DIR"`, or whatever the project's build
+system reads, is the caller's first line. The name on the left of that export
+belongs to the build system, not to the image, so it is not this repository's
+to know.
 
 The design note this repository implements lives in `pnb/utils`, as
 `ci-shared-workflows.md`.
