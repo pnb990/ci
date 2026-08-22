@@ -1,0 +1,167 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Builds a firmware configuration inside the toolchain image. One job, one
+# build command, optionally one artifact.
+#
+# This is the single copy of what `build-firmware.yaml` and `build-doc.yaml`
+# repeated across the projects -- which was the question this whole exercise
+# started from. The steps around the build are identical everywhere; what
+# differs is the command in the middle, so that command is the input.
+#
+# What deliberately does NOT live here:
+#
+#   * the matrix, and the `prepare` job that computes it. That is where the two
+#     build systems actually diverge -- pnbchrono asks cmake for its presets,
+#     domo lists targets -- and a shared workflow that tried to cover both
+#     would be a switch statement pretending to be a workflow. The caller keeps
+#     its matrix and passes one expanded value per job.
+#
+#   * the trigger, and the image pin. Both belong to the project they gate.
+#
+#   * the build's environment. `ARM_TOOLCHAIN_DIR` is what the image publishes;
+#     `TOOLCHAIN_STM32_DIR` is what an STM32 CMakeLists or Makefile reads, and
+#     the mapping between the two is project knowledge. Exporting it here would
+#     put one project's vocabulary into the shared copy and quietly make STM32
+#     the only kind of build that fits. The caller exports what it needs, as
+#     the first line of `build`.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the toolchain image, pinned to a commit tag. Stays
+          in the calling project: a pin is a commit in the repository it
+          protects. The `doc` variant is just another value here.
+        type: string
+        required: true
+      build:
+        description: >-
+          The build command, run inside the image. Multi-line is fine.
+
+          It runs with the image's own environment and nothing added: exporting
+          whatever the project's build system expects is part of this command.
+          A firmware project on STM32 typically starts it with
+          `export TOOLCHAIN_STM32_DIR="$ARM_TOOLCHAIN_DIR"`, mapping the
+          variable the image publishes onto the one its CMakeLists or Makefile
+          reads. That mapping is project knowledge -- the name on the left
+          belongs to the build system, not to the image -- so it stays with the
+          caller.
+        type: string
+        required: true
+      matrix-value:
+        description: >-
+          The expanded matrix value this job was given --
+          `${{ matrix.preset }}`, `${{ matrix.target }}`. Passed only so the
+          guard below can check it is not empty; nothing else reads it.
+        type: string
+        default: ""
+      require-matrix:
+        description: >-
+          Whether an empty `matrix-value` is a failure. It takes two inputs
+          rather than one because an empty string is genuinely ambiguous: it is
+          what a caller with no matrix sends, and it is also what a matrix that
+          failed to expand sends. Only the caller knows which. `build-doc` has
+          no matrix and leaves this false; `build-firmware` sets it.
+        type: boolean
+        default: false
+      submodules:
+        description: >-
+          Passed to actions/checkout. `recursive` is what a firmware tree with
+          vendored libraries needs, and is the default.
+        type: string
+        default: "recursive"
+      artifact-name:
+        description: >-
+          Name of the artifact to upload after the build. Empty, the default,
+          means the build produces nothing to keep -- which is the case for
+          every firmware job today; only the doc uploads.
+        type: string
+        default: ""
+      artifact-path:
+        description: Path to upload. Required when artifact-name is set.
+        type: string
+        default: ""
+      artifact-retention-days:
+        description: How long the forge keeps the artifact.
+        type: number
+        default: 30
+
+jobs:
+  fw-build:
+    # node for the JavaScript actions, git, uv, cmake/ninja/make and the ARM
+    # toolchain all come from the image, built by soft-lib/docker-images.
+    # Pinned to a commit tag by the caller, not to `ci-latest`: a workflow that
+    # gates a push must not be able to break on a commit that has nothing to do
+    # with it. check-image-bump.yaml is what says when the bump is safe.
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+
+    steps:
+      # First step of the job, before anything expensive: an unexpanded matrix
+      # is an infrastructure failure, and without this check it reaches the
+      # build as a bare `cmake --preset`, whose "No preset specified" reads
+      # like a project error and sends the reader looking at the image.
+      #
+      # act_runner v13.0.0 evaluates `strategy.matrix` when it plans the
+      # workflow, before a `prepare` job has published its outputs, so a
+      # `fromJSON(needs.prepare.outputs.…)` matrix can see an empty value and
+      # yield one job with an empty entry instead of failing. This is the one
+      # copy of a guard that used to sit in each project.
+      - name: Check the matrix expanded
+        if: inputs.require-matrix && inputs.matrix-value == ''
+        run: |
+          echo "empty matrix value: the dynamic matrix did not expand." >&2
+          echo "Check the 'Detected …' line of the prepare job." >&2
+          exit 1
+
+      # The tag is already the commit here, but the stamp is what proves the
+      # image really is that build, and it is the same step as in
+      # check-image-bump.yaml, where the tag floats. The `||` covers the
+      # images built before the stamp was introduced.
+      - name: Image provenance
+        run: cat /etc/pnb-image 2>/dev/null || echo "unstamped image"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      # The configure step of a firmware build runs the python generators, so
+      # the environment is needed even when the build itself is pure cmake.
+      #
+      # --locked, not --frozen: --frozen installs a lock that no longer matches
+      # pyproject.toml without a word. See the longer note in
+      # python-checks.yaml.
+      - name: Install dependencies
+        run: uv sync --dev --locked
+
+      # Nothing is exported here. The variables a build needs are named by the
+      # project's build system, not by this workflow: TOOLCHAIN_STM32_DIR is an
+      # STM32 CMake/Makefile convention, and hard-coding it would put one
+      # project's vocabulary into the shared copy and quietly make it the only
+      # kind of build that fits. The caller exports what it needs, as the first
+      # line of `build`.
+      - name: Build
+        run: ${{ inputs.build }}
+
+      - name: Show what was produced
+        if: inputs.artifact-name != ''
+        run: du -sh "${{ inputs.artifact-path }}" && ls "${{ inputs.artifact-path }}" | head
+
+      # Needs artifact storage enabled on the Forgejo instance
+      # ([actions] ARTIFACT_RETENTION_DAYS); drop to `@v3` if the instance is
+      # too old for the v4 artifact API.
+      - name: Upload artifact
+        if: inputs.artifact-name != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
