@@ -189,14 +189,18 @@ jobs:
       # large-upload fix in 9.0. `+gitea-1.22.0` in the version string is an
       # API compatibility marker, not the version.
       #
-      # Measured, soft-lib/ci run 2, 2026-08-22: github v4 failed, fork v4 and
-      # v5 succeeded, and fork v4 also carried 20 MB of incompressible bytes --
-      # the size test matters because a historical JSON-parsing bug broke
-      # uploads over ~8 MB. v4 rather than v5 is the tag with both results
-      # behind it, and the artifact this uploads is 75 MB of doxygen.
+      # Measured, soft-lib/ci runs 2 and 3, 2026-08-22: github v4 fails in five
+      # seconds without attempting anything, while fork v4 and fork v5 both
+      # succeed, including with 20 MB of incompressible bytes. That size test
+      # is not padding -- a JSON-parsing bug broke uploads over ~8 MB until
+      # Forgejo 9.0, and what this step uploads is 75 MB of doxygen.
+      #
+      # v5 because both tags are equally evidenced and v5 is 21 months newer:
+      # v4.3.1 is from 2024-03-21, v5 from 2025-12-29. There is no v6 -- only
+      # an untagged `branch-v6`, and a branch is not something to pin.
       - name: Upload artifact
         if: inputs.artifact-name != ''
-        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v5
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifact-path }}
