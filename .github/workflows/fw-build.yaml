@@ -122,10 +122,17 @@ jobs:
 
       # The tag is already the commit here, but the stamp is what proves the
       # image really is that build, and it is the same step as in
-      # check-image-bump.yaml, where the tag floats. The `||` covers the
-      # images built before the stamp was introduced.
+      # check-image-bump.yaml, where the tag floats.
+      #
+      # The `||` does not fail the job, and its message names the one cause
+      # that is actionable. /etc/image-info replaced /etc/pnb-image in
+      # docker-images, in a single round with no transition: an image missing
+      # it is either older than the stamp itself, or a pin that was not bumped
+      # along with the rename.
       - name: Image provenance
-        run: cat /etc/pnb-image 2>/dev/null || echo "unstamped image"
+        run: |
+          cat /etc/image-info 2>/dev/null \
+            || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
 
       - name: Checkout
         uses: actions/checkout@v6
