@@ -85,6 +85,12 @@ the build command comes in as an input, and the matrix with the `prepare` job
 that computes it stays in the project. That is where make and cmake genuinely
 diverge, and it is the line this repository does not cross.
 
+One consequence of calling rather than copying, measured rather than guessed: a
+caller's own `name:` lands on the **0 s wrapper task**, not on the task that
+does the work. A matrix caller would therefore get N identical rows in the run
+list unless the shared job names itself. `fw-build.yaml` does, from
+`matrix-value` — which is why that input earns its keep twice.
+
 The build command carries its own environment: exporting
 `TOOLCHAIN_STM32_DIR="$ARM_TOOLCHAIN_DIR"`, or whatever the project's build
 system reads, is the caller's first line. The name on the left of that export

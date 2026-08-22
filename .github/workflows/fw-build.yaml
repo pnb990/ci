@@ -93,6 +93,19 @@
 
 jobs:
   fw-build:
+    # The run list shows *this* name on the task that does the work. Without
+    # it, a caller with a matrix produces six tasks all called `fw-build`, and
+    # the caller's own `name: build (${{ matrix.preset }})` lands on the 0 s
+    # wrapper beside them instead -- measured on pnbchrono run 156, where the
+    # six 264-284 s tasks were indistinguishable and the six named ones did no
+    # work. So the value the caller passes for the guard is also what labels
+    # the job.
+    #
+    # It reads a little redundantly for a caller with no matrix ("fw-build "),
+    # which is the price of not needing a second input to say the same thing
+    # twice.
+    name: fw-build ${{ inputs.matrix-value }}
+
     # node for the JavaScript actions, git, uv, cmake/ninja/make and the ARM
     # toolchain all come from the image, built by soft-lib/docker-images.
     # Pinned to a commit tag by the caller, not to `ci-latest`: a workflow that
@@ -154,7 +167,11 @@ jobs:
       # project's vocabulary into the shared copy and quietly make it the only
       # kind of build that fits. The caller exports what it needs, as the first
       # line of `build`.
-      - name: Build
+      # The matrix value is in the step name too, and not only in the job name
+      # above: the job name is what Forgejo decides to render, the step name is
+      # what the log page shows whatever it decides. One of the two always
+      # says which configuration this was.
+      - name: Build ${{ inputs.matrix-value }}
         run: ${{ inputs.build }}
 
       - name: Show what was produced
