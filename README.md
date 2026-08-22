@@ -91,6 +91,12 @@ does the work. A matrix caller would therefore get N identical rows in the run
 list unless the shared job names itself. `fw-build.yaml` does, from
 `matrix-value` — which is why that input earns its keep twice.
 
+Artifacts are uploaded with
+**`https://code.forgejo.org/forgejo/upload-artifact@v4`**, Forgejo's fork.
+GitHub's own `actions/upload-artifact@v4` refuses to run outside github.com and
+fails in four seconds without uploading anything. The fork is the same action
+with that check removed; measured working here, including a 20 MB payload.
+
 The build command carries its own environment: exporting
 `TOOLCHAIN_STM32_DIR="$ARM_TOOLCHAIN_DIR"`, or whatever the project's build
 system reads, is the caller's first line. The name on the left of that export
