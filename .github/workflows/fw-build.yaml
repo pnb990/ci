@@ -174,9 +174,24 @@ jobs:
       - name: Build ${{ inputs.matrix-value }}
         run: ${{ inputs.build }}
 
+      # No `| head`. The runner runs steps under `bash -e -o pipefail`, so a
+      # truncating pipe is a failure waiting for enough output: `head` closes
+      # the pipe after ten lines, `ls` takes SIGPIPE and exits 141, and
+      # pipefail promotes that to the step's status. It cost this workflow a
+      # red build-doc and six rounds of probing the uploader, which was never
+      # involved -- the log said `exitcode '141'` and
+      # `skipping post step for 'Upload artifact'; main step was skipped`.
+      #
+      # The trap is that it only fires when the listing is long enough. A
+      # directory of two files passes; 3786 files of doxygen do not.
+      #
+      # `wc -l` reads its input to the end, so nothing truncates, and the count
+      # is the more useful number anyway.
       - name: Show what was produced
         if: inputs.artifact-name != ''
-        run: du -sh "${{ inputs.artifact-path }}" && ls "${{ inputs.artifact-path }}" | head
+        run: |
+          du -sh -- "${{ inputs.artifact-path }}"
+          echo "$(find "${{ inputs.artifact-path }}" -type f | wc -l) files"
 
       # **Forgejo's fork**, not `actions/upload-artifact`. GitHub's own v4
       # action carries a check that refuses to run anywhere but github.com, so
