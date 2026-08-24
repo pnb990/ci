@@ -79,6 +79,16 @@ there and rolling it back is a `git revert` there.
 A python project calls the first two, and gets the two results it had before. A
 project with no python calls only `lint-reuse.yaml`, with `pinned: false`.
 
+`python-checks.yaml` runs four tools, one step each: `ruff check`, `ruff format
+--check`, `pylint` and `pyright`. They are not optional and there is no input
+to turn one off. A caller therefore carries `ruff`, `pylint` and `pyright` in
+its dev dependencies and configures them in its `pyproject.toml` — for pyright
+an `exclude` matters, as it follows a directory rather than a file list. The
+reason for having no opt-out is the reason this repository exists: two of the
+four original projects had a `test-python.yaml` that ran no linter at all, and
+pyright was running in one project out of five. A per-project switch is how
+that comes back.
+
 `fw-build.yaml` shares the *scaffolding* of a firmware build — image,
 provenance stamp, recursive checkout, `uv sync`, the optional artifact — while
 the build command comes in as an input, and the matrix with the `prepare` job

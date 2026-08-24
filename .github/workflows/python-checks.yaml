@@ -115,6 +115,33 @@ jobs:
       - name: Coding rules
         run: uv run pylint --recursive=y .
 
+      # Types, which neither tool above looks at. ruff's F rules are pyflakes
+      # -- names, imports, unused code -- and pylint infers types rather than
+      # checking the annotations against the calls. pyright is the only step
+      # here that reads a signature and says the call does not match it.
+      #
+      # It arrived from docker-images, which had been running it out of its
+      # own tests/test.py since before this repository existed, and was the
+      # only project doing so. That is the same finding as the linters
+      # themselves: a tool adopted in one project and never propagated is
+      # exactly what a shared workflow is for. Callers therefore carry
+      # `pyright` as a dev dependency, like ruff and pylint, and configure it
+      # under [tool.pyright] -- an `exclude` for vendored trees especially,
+      # since pyright follows a directory, not a file list.
+      #
+      # No download at run time: the wheel bundles the node package it drives,
+      # and PYRIGHT_PYTHON_USE_BUNDLED_PYRIGHT defaults to on, so the version
+      # that runs is the one uv.lock names. node itself comes from the image.
+      #
+      # The wheel does ask PyPI whether a newer pyright-python exists, only to
+      # print a nag. It returns None when offline and cannot fail the run, but
+      # which version runs is the lock's business here, so the question is
+      # turned off rather than answered.
+      - name: Type check
+        env:
+          PYRIGHT_PYTHON_IGNORE_WARNINGS: "1"
+        run: uv run pyright
+
       # Last, so a failing test is read against an already-linted tree.
       - name: Run tests
         if: inputs.test != ''
