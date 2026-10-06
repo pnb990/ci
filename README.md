@@ -113,8 +113,8 @@ system reads, is the caller's first line. The name on the left of that export
 belongs to the build system, not to the image, so it is not this repository's
 to know.
 
-The design note this repository implements lives in `pnb/utils`, as
-`ci-shared-workflows.md`.
+How a project becomes a caller, the pin rules, and what was learnt while
+converting the first projects: [docs/design-notes.md](docs/design-notes.md).
 
 ## Requirements
 
