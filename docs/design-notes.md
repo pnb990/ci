@@ -100,10 +100,15 @@ zero in the projects that were already callers.
 ## Forgejo behaviour worth knowing
 
 - **Workflows cannot be inherited.** A workflow file must exist in the
-  project's `.github/workflows/`; a submodule cannot carry one (nothing is
+  project's `.forgejo/workflows/`; a submodule cannot carry one (nothing is
   checked out at parse time). A composite action in a submodule would work,
   but it costs a submodule per project to do what `uses: owner/repo@<sha>` does
   for free.
+- **`.forgejo/workflows/`, not `.github/workflows/`.** Forgejo reads the
+  former first and GitHub ignores it, so a GitHub mirror stops running jobs
+  whose `uses:` and runner labels only resolve on this forge. Callers pinned
+  before the move still name `.github/workflows/` in their `uses:`; that path
+  changes with the bump that crosses the move.
 - **Scheduled workflows run on the default branch only.** pnbchrono's
   `check-image-bump.yaml` canary never ran until its branch reached `master`.
 - **A called workflow shows as two tasks**: a 0 s wrapper named `<job>`, which

@@ -19,20 +19,20 @@ made in one project and never propagated back — including two projects whose
 ## Calling a workflow
 
 A workflow file must physically exist in the calling project's
-`.github/workflows/`: Forgejo parses it server-side from the tree of the pushed
+`.forgejo/workflows/`: Forgejo parses it server-side from the tree of the pushed
 commit, so there is no inheritance and a submodule cannot carry one. What each
 project keeps is therefore a thin caller holding **its own trigger** — which is
 right, since the trigger is exactly what is project-specific.
 
 ```yaml
-# .github/workflows/python-checks.yaml, in the calling project
+# .forgejo/workflows/python-checks.yaml, in the calling project
 ---
 "on":
   push:
 
 jobs:
   python-checks:
-    uses: soft-lib/ci/.github/workflows/python-checks.yaml@<sha>
+    uses: soft-lib/ci/.forgejo/workflows/python-checks.yaml@<sha>
     with:
       image: pnb990/python3:ci-85fbc6f6edf84bcaa189cc923b6889e9d48987b2
       test: pytest tests
