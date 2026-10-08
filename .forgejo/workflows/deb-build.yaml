@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Builds a Debian package from its `debian/` directory, checks it, and on a
+# release tag publishes it to the owner's Debian registry on this forge.
+#
+# Everything a package-specific workflow would take as input is already in
+# `debian/`: the build dependencies in `debian/control`, the version in
+# `debian/changelog`, the tests in `debian/tests/`. So the only input is the
+# image, and the steps are the ones Debian itself runs on a package:
+#
+#   build-dep -> dpkg-buildpackage -> lintian -> install -> purge -> autopkgtest
+#
+# The image is `debian-pkg:ci` from soft-lib/docker-images: build-essential,
+# debhelper, dpkg-dev, lintian and autopkgtest. A package's own Build-Depends
+# are not in it; they are installed here from its `debian/control`. The
+# distribution the package is built for, and published to, is the image's.
+#
+# Publishing happens only on a `v*` tag, which is the caller's trigger to
+# decide, and needs the PACKAGE_TOKEN secret. The registry is per owner and a
+# published version is immutable, so the tag must be the changelog's version:
+# a new build is a new `debian/changelog` entry, never a re-pushed tag.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image, pinned to a commit tag:
+          `pnb990/debian-pkg:ci-<sha>`. Stays in the calling project: a pin is
+          a commit in the repository it protects.
+        type: string
+        required: true
+    secrets:
+      PACKAGE_TOKEN:
+        description: >-
+          A token with write:package on the repository owner, used only on a
+          release tag. A caller that never tags can leave it out.
+        required: false
+
+jobs:
+  deb-build:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+
+    steps:
+      - name: Image provenance
+        run: |
+          cat /etc/image-info 2>/dev/null \
+            || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # `build-dep ./` reads the Build-Depends of the checked-out
+      # debian/control: no deb-src line needed, and nothing package-specific
+      # in the image.
+      - name: Install the build dependencies
+        run: |
+          apt-get update
+          apt-get build-dep -y ./
+
+      # dpkg-buildpackage writes next to the source tree, in `..`; the
+      # results are moved into the workspace so the later steps and the
+      # upload find them. dh_auto_test runs the package's unit tests here.
+      - name: Build
+        id: build
+        run: |
+          dpkg-buildpackage -us -uc -b
+          mkdir out
+          mv ../*.deb ../*.changes ../*.buildinfo out/
+          for deb in out/*.deb; do
+              dpkg-deb --info "$deb"
+              dpkg-deb --contents "$deb"
+          done
+          echo "source=$(dpkg-parsechangelog -S Source)" >> "$FORGEJO_OUTPUT"
+
+      # Warnings fail too: Debian treats them as bugs, and a warning left in
+      # becomes the noise that hides the next one.
+      - name: Lintian
+        run: lintian --allow-root --fail-on error,warning out/*.changes
+
+      # The maintainer scripts' test, in piuparts' order: install, then purge,
+      # before autopkgtest. Non-interactive: debconf takes every default, as
+      # on a fresh host.
+      - name: Install
+        run: DEBIAN_FRONTEND=noninteractive apt-get install -y ./out/*.deb
+
+      - name: Purge
+        run: |
+          packages=""
+          for deb in out/*.deb; do
+              packages="$packages $(dpkg-deb -f "$deb" Package)"
+          done
+          # shellcheck disable=SC2086 # one word per package
+          DEBIAN_FRONTEND=noninteractive apt-get purge -y $packages
+
+      # Last, because autopkgtest installs what a test depends on itself
+      # (`Depends: @`) and a test may remove the package again: nothing runs
+      # after it on the package. `null` runs the tests right here, in the
+      # job's container, which is already the throw-away testbed autopkgtest
+      # would otherwise create. Given the .debs, it tests these binaries
+      # rather than the archive's. A package without debian/tests/ says so in
+      # the log rather than showing a skipped step.
+      - name: autopkgtest
+        run: |
+          if [ -f debian/tests/control ]; then
+              autopkgtest out/*.deb ./ -- null
+          else
+              echo "no debian/tests/control: nothing to run"
+          fi
+
+      # Forgejo's fork: GitHub's own upload-artifact refuses to run off
+      # github.com (see fw-build.yaml).
+      - name: Upload artifact
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v5
+        with:
+          name: ${{ steps.build.outputs.source }}-deb
+          path: out/*.deb
+          if-no-files-found: error
+
+      # The tag is compared with the changelog after DEP-14 mangling (`~` ->
+      # `_`, `:` -> `%`), the characters a Debian version may hold and a git
+      # tag may not. 409 means the version is already published: it is not
+      # overwritten, the changelog has to move on.
+      - name: Publish to the Debian registry
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          REGISTRY: ${{ github.server_url }}/api/packages/${{ github.repository_owner }}/debian
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(dpkg-parsechangelog -S Version | sed -e 's/~/_/g' -e 's/:/%/g')
+          if [ "$TAG" != "v$version" ]; then
+              echo "::error::tag $TAG does not match debian/changelog version $version"
+              exit 1
+          fi
+          if [ -z "$PACKAGE_TOKEN" ]; then
+              echo "::error::release tag but no PACKAGE_TOKEN secret passed by the caller"
+              exit 1
+          fi
+          . /etc/os-release
+          for deb in out/*.deb; do
+              status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+                  --header "Authorization: token ${PACKAGE_TOKEN}" \
+                  --upload-file "$deb" "${REGISTRY}/pool/${VERSION_CODENAME}/main/upload")
+              case "$status" in
+                  201) echo "published $(basename "$deb") to ${REGISTRY} ${VERSION_CODENAME}/main" ;;
+                  409) echo "::notice::$(basename "$deb") already published; add a debian/changelog entry to publish a new build" ;;
+                  *) echo "::error::$(basename "$deb"): upload failed, HTTP ${status}"; exit 1 ;;
+              esac
+          done

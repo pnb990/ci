@@ -75,6 +75,7 @@ there and rolling it back is a `git revert` there.
 | `python-checks.yaml` | `test-python.yaml` | `image` (required), `test`, `submodules` |
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required); secret `PACKAGE_TOKEN` |
 
 A python project calls the first two, and gets the two results it had before. A
 project with no python calls only `lint-reuse.yaml`, with `pinned: false`.
@@ -113,6 +114,25 @@ The build command carries its own environment: exporting
 system reads, is the caller's first line. The name on the left of that export
 belongs to the build system, not to the image, so it is not this repository's
 to know.
+
+`deb-build.yaml` takes nothing but the image, `pnb990/debian-pkg:ci-<sha>`,
+because a Debian package already describes itself: Build-Depends in
+`debian/control`, version in `debian/changelog`, tests in `debian/tests/`. It
+runs what Debian runs on a package — `apt-get build-dep`, `dpkg-buildpackage`,
+lintian (warnings fail), install and purge, autopkgtest with the `null` backend —
+and uploads the `.deb`s as `<source>-deb`. On a `v*` tag matching the
+changelog version, it publishes them to the owner's Debian registry, in the
+image's codename and component `main`. The caller passes the token:
+
+```yaml
+jobs:
+  deb-build:
+    uses: soft-lib/ci/.forgejo/workflows/deb-build.yaml@<sha>
+    with:
+      image: pnb990/debian-pkg:ci-<sha>
+    secrets:
+      PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+```
 
 How a project becomes a caller, the pin rules, and what was learnt while
 converting the first projects: [docs/design-notes.md](docs/design-notes.md).
