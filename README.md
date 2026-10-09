@@ -74,7 +74,7 @@ there and rolling it back is a `git revert` there.
 |---|---|---|
 | `python-checks.yaml` | `test-python.yaml` | `image` (required), `test`, `submodules` |
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
-| `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
+| `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 
 A python project calls the first two, and gets the two results it had before. A
 project with no python calls only `lint-reuse.yaml`, with `pinned: false`.
@@ -90,7 +90,8 @@ pyright was running in one project out of five. A per-project switch is how
 that comes back.
 
 `fw-build.yaml` shares the *scaffolding* of a firmware build — image,
-provenance stamp, recursive checkout, `uv sync`, the optional artifact — while
+provenance stamp, recursive checkout, `uv sync` (`uv-sync: false` for a
+project with no python environment), the optional artifact — while
 the build command comes in as an input, and the matrix with the `prepare` job
 that computes it stays in the project. That is where make and cmake genuinely
 diverge, and it is the line this repository does not cross.
