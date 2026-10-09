@@ -75,6 +75,16 @@
           vendored libraries needs, and is the default.
         type: string
         default: "recursive"
+      uv-sync:
+        description: >-
+          Whether to install the project's python environment before the
+          build. `true`, the default, is what a firmware tree whose configure
+          step runs python generators needs. `false` for a project with no
+          pyproject.toml at all -- a repository of C libraries, say -- where
+          `uv sync` can only fail. The same opt-out as lint-reuse.yaml's
+          `pinned: false`.
+        type: boolean
+        default: true
       artifact-name:
         description: >-
           Name of the artifact to upload after the build. Empty, the default,
@@ -159,6 +169,7 @@ jobs:
       # pyproject.toml without a word. See the longer note in
       # python-checks.yaml.
       - name: Install dependencies
+        if: inputs.uv-sync
         run: uv sync --dev --locked
 
       # Nothing is exported here. The variables a build needs are named by the
