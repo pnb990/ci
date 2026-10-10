@@ -153,6 +153,14 @@ when there is enough output: two files pass, 3786 files of doxygen do not.
   `dpkg-buildpackage -b`, `../*.deb`, `dpkg-parsechangelog`), so they are not
   inputs. A package that needs something else changes its `debian/`, as it
   would for Debian.
+- **Checkout into `source/`.** dpkg-buildpackage always writes its results in
+  `..` (the `.deb`s come from `dh_builddeb`, whose `--destdir` belongs to the
+  package's `debian/rules`), and the `.changes` names its files without a
+  path, so they must stay together. With the tree one level down, `..` is the
+  job's workspace: the results land there with nothing else, as in sbuild and
+  salsa-ci. A first version built in the workspace root and moved `../*.deb`
+  into `out/`, i.e. globbed the runner's directory of all the owner's
+  workspaces (review of #13).
 - **The image carries the tools, not the package's dependencies.**
   `debian-pkg` has build-essential (which `dpkg-buildpackage` requires even
   for `Architecture: all`), debhelper, lintian and autopkgtest; Build-Depends

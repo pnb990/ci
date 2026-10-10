@@ -53,27 +53,33 @@ jobs:
           cat /etc/image-info 2>/dev/null \
             || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
 
+      # Into `source/`, as sbuild and salsa-ci do: dpkg-buildpackage writes
+      # its results next to the source tree, in `..`, and has no option to
+      # put them elsewhere (only `dh_builddeb --destdir`, which is the
+      # package's debian/rules to decide). With the tree one level down,
+      # `..` is the job's own workspace: the results land there, and nothing
+      # else does.
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          path: source
 
       # `build-dep ./` reads the Build-Depends of the checked-out
       # debian/control: no deb-src line needed, and nothing package-specific
       # in the image.
       - name: Install the build dependencies
+        working-directory: source
         run: |
           apt-get update
           apt-get build-dep -y ./
 
-      # dpkg-buildpackage writes next to the source tree, in `..`; the
-      # results are moved into the workspace so the later steps and the
-      # upload find them. dh_auto_test runs the package's unit tests here.
+      # dh_auto_test runs the package's unit tests here.
       - name: Build
         id: build
+        working-directory: source
         run: |
           dpkg-buildpackage -us -uc -b
-          mkdir out
-          mv ../*.deb ../*.changes ../*.buildinfo out/
-          for deb in out/*.deb; do
+          for deb in ../*.deb; do
               dpkg-deb --info "$deb"
               dpkg-deb --contents "$deb"
           done
@@ -82,18 +88,18 @@ jobs:
       # Warnings fail too: Debian treats them as bugs, and a warning left in
       # becomes the noise that hides the next one.
       - name: Lintian
-        run: lintian --allow-root --fail-on error,warning out/*.changes
+        run: lintian --allow-root --fail-on error,warning ./*.changes
 
       # The maintainer scripts' test, in piuparts' order: install, then purge,
       # before autopkgtest. Non-interactive: debconf takes every default, as
       # on a fresh host.
       - name: Install
-        run: DEBIAN_FRONTEND=noninteractive apt-get install -y ./out/*.deb
+        run: DEBIAN_FRONTEND=noninteractive apt-get install -y ./*.deb
 
       - name: Purge
         run: |
           packages=""
-          for deb in out/*.deb; do
+          for deb in ./*.deb; do
               packages="$packages $(dpkg-deb -f "$deb" Package)"
           done
           # shellcheck disable=SC2086 # one word per package
@@ -108,8 +114,8 @@ jobs:
       # the log rather than showing a skipped step.
       - name: autopkgtest
         run: |
-          if [ -f debian/tests/control ]; then
-              autopkgtest out/*.deb ./ -- null
+          if [ -f source/debian/tests/control ]; then
+              autopkgtest ./*.deb source/ -- null
           else
               echo "no debian/tests/control: nothing to run"
           fi
@@ -120,7 +126,7 @@ jobs:
         uses: https://code.forgejo.org/forgejo/upload-artifact@v5
         with:
           name: ${{ steps.build.outputs.source }}-deb
-          path: out/*.deb
+          path: ./*.deb
           if-no-files-found: error
 
       # The tag is compared with the changelog after DEP-14 mangling (`~` ->
@@ -134,7 +140,7 @@ jobs:
           REGISTRY: ${{ github.server_url }}/api/packages/${{ github.repository_owner }}/debian
           TAG: ${{ github.ref_name }}
         run: |
-          version=$(dpkg-parsechangelog -S Version | sed -e 's/~/_/g' -e 's/:/%/g')
+          version=$(dpkg-parsechangelog -l source/debian/changelog -S Version | sed -e 's/~/_/g' -e 's/:/%/g')
           if [ "$TAG" != "v$version" ]; then
               echo "::error::tag $TAG does not match debian/changelog version $version"
               exit 1
@@ -144,7 +150,7 @@ jobs:
               exit 1
           fi
           . /etc/os-release
-          for deb in out/*.deb; do
+          for deb in ./*.deb; do
               status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
                   --header "Authorization: token ${PACKAGE_TOKEN}" \
                   --upload-file "$deb" "${REGISTRY}/pool/${VERSION_CODENAME}/main/upload")
