@@ -23,6 +23,17 @@
 # decide, and needs the PACKAGE_TOKEN secret. The registry is per owner and a
 # published version is immutable, so the tag must be the changelog's version:
 # a new build is a new `debian/changelog` entry, never a re-pushed tag.
+#
+# PACKAGE_TOKEN is a token with write:package on the repository owner. It is
+# not declared under `workflow_call`: Forgejo only accepts `inputs` and
+# `outputs` there, and rejects the whole workflow otherwise. A called workflow
+# sees no secret of its caller unless the calling job passes it:
+#
+#   uses: soft-lib/ci/.forgejo/workflows/deb-build.yaml@<sha>
+#   secrets:
+#     PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}   # or `secrets: inherit`
+#
+# A caller that never tags can leave it out.
 
 "on":
   workflow_call:
@@ -34,12 +45,6 @@
           a commit in the repository it protects.
         type: string
         required: true
-    secrets:
-      PACKAGE_TOKEN:
-        description: >-
-          A token with write:package on the repository owner, used only on a
-          release tag. A caller that never tags can leave it out.
-        required: false
 
 jobs:
   deb-build:
