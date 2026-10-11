@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Lints the markdown of the calling project with markdownlint-cli2.
+#
+# Its own workflow, like lint-reuse.yaml and for the same reasons: markdown is
+# not a python matter -- a documentation repository has nothing else to check
+# -- and a job is what shows up in the run list.
+#
+# The rules are the caller's: markdownlint-cli2 finds the .markdownlint.yaml
+# at the project root on its own, and it is the same file the
+# davidanson.vscode-markdownlint extension reads, so the editor and this job
+# agree.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image, pinned to a commit tag. Stays in the
+          calling project: a pin is a commit in the repository it protects.
+          Any `ci` image will do: they carry nodejs and npm so the runner can
+          execute JavaScript actions, and that node is what runs the linter.
+        type: string
+        required: true
+      globs:
+        description: >-
+          Space-separated globs handed to markdownlint-cli2. Quoted on the
+          command line, so the tool expands them, `**` included.
+        type: string
+        default: "**/*.md"
+      submodules:
+        description: >-
+          Passed to actions/checkout. `false` by default, unlike the other
+          workflows here: a submodule is a separate repository that answers for
+          its own markdown, and checking it out would get it linted with the
+          caller's rules.
+        type: string
+        default: "false"
+
+jobs:
+  markdown-lint:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+    steps:
+      # The tag is already the commit here, but the stamp is what proves the
+      # image really is that build. See lint-reuse.yaml.
+      - name: Image provenance
+        run: |
+          cat /etc/image-info 2>/dev/null \
+            || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
+
+      - name: Checkout the repo
+        uses: actions/checkout@v6
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      # Pinned by version: an unpinned `npx markdownlint-cli2` resolves at run
+      # time, so a release adding a rule would fail a commit that changed
+      # nothing. The version lives here rather than in an input, since callers
+      # pin this repository by sha: bumping it is a commit here, then a
+      # reviewable bump of that sha in each project.
+      #
+      # GLOBS goes through the environment and is split by the shell on
+      # purpose; each glob is then quoted so the tool, not the shell, expands
+      # it.
+      - name: Lint markdown
+        env:
+          GLOBS: ${{ inputs.globs }}
+        run: |
+          set -f
+          set -- $GLOBS
+          npx --yes markdownlint-cli2@0.23.2 "$@"
