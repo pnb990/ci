@@ -75,7 +75,7 @@ there and rolling it back is a `git revert` there.
 | `python-checks.yaml` | `test-python.yaml` | `image` (required), `test`, `submodules` |
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
-| `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
+| `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 | `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required); secret `PACKAGE_TOKEN` |
 
 A python project calls the first two, and gets the two results it had before. A
@@ -95,10 +95,20 @@ that comes back.
 
 `fw-build.yaml` shares the *scaffolding* of a firmware build — image,
 provenance stamp, recursive checkout, `uv sync` (`uv-sync: false` for a
-project with no python environment), the optional artifact — while
+project with no python environment), clang-tidy over the build's
+`compile_commands.json`, the optional artifact — while
 the build command comes in as an input, and the matrix with the `prepare` job
 that computes it stays in the project. That is where make and cmake genuinely
 diverge, and it is the line this repository does not cross.
+
+clang-tidy is on by default and any finding fails the job. It runs with
+`-Wdocumentation`, which gcc does not have, so a doxygen `@param` that drifted
+from its prototype is caught without a clang build. The build must write
+`compile_commands.json` (`CMAKE_EXPORT_COMPILE_COMMANDS=ON`) and the caller
+points `compile-commands-dir` at it; the checks are the project's
+`.clang-tidy`. Without one, clang-tidy's defaults include `clang-analyzer-*`,
+whose `core.FixedAddressDereference` flags every register access of a
+firmware: a firmware project wants a `.clang-tidy` before its first run.
 
 One consequence of calling rather than copying, measured rather than guessed: a
 caller's own `name:` lands on the **0 s wrapper task**, not on the task that

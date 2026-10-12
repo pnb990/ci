@@ -85,6 +85,35 @@
           `pinned: false`.
         type: boolean
         default: true
+      clang-tidy:
+        description: >-
+          Whether to run clang-tidy over the compilation database once the
+          build has passed, with `-Wdocumentation` added, so a doxygen
+          `@param` that no longer matches its prototype fails the job. On by
+          default, like the linters of python-checks.yaml: an opt-in check is
+          one that ends up running nowhere. Any finding fails the job. The
+          checks are the project's `.clang-tidy`, or clang-tidy's defaults
+          without one. `false` for a job that builds nothing to analyse, such
+          as the doc.
+        type: boolean
+        default: true
+      compile-commands-dir:
+        description: >-
+          Directory holding the `compile_commands.json` the build produced,
+          relative to the checkout. Producing it is the build's job: cmake with
+          `CMAKE_EXPORT_COMPILE_COMMANDS=ON` writes it in the preset's
+          binaryDir, which is what goes here.
+        type: string
+        default: "."
+      clang-tidy-files:
+        description: >-
+          Python regex selecting the files of the database to analyse. The
+          default keeps the C and C++ sources: a firmware database also lists
+          its assembly startup files, which clang-tidy reads as C and rejects.
+          A negative lookahead excludes vendored code, e.g.
+          `^(?!.*/lib_ext/mbedtls/).*\.c$`.
+        type: string
+        default: '\.(c|cc|cpp|cxx)$'
       artifact-name:
         description: >-
           Name of the artifact to upload after the build. Empty, the default,
@@ -184,6 +213,38 @@ jobs:
       # says which configuration this was.
       - name: Build ${{ inputs.matrix-value }}
         run: ${{ inputs.build }}
+
+      # clang-tidy rather than a clang build: -Wdocumentation is clang-only,
+      # gcc rejects it, and clang-tidy reports compiler warnings as
+      # clang-diagnostic-* from the very database the gcc build wrote.
+      #
+      # run-clang-tidy is not on the PATH (Debian ships it as
+      # run-clang-tidy-<version>); it sits next to the real clang-tidy, which
+      # keeps the clang version out of this file.
+      #
+      # -header-filter, because doxygen comments live on the declaration: by
+      # default clang-tidy keeps quiet about headers, which is where they are.
+      # The two -Wno- silence what clang says about gcc-only options of a cross
+      # database, not about the code. Measured on pnbchrono, 2026-10-12: 524
+      # unused-command-line-argument lines without them, 79 documentation
+      # findings in the sources and 7 more in the headers once filtered in.
+      - name: clang-tidy ${{ inputs.matrix-value }}
+        if: inputs.clang-tidy
+        env:
+          DB_DIR: ${{ inputs.compile-commands-dir }}
+          FILES: ${{ inputs.clang-tidy-files }}
+        run: |
+          if [ ! -f "$DB_DIR/compile_commands.json" ]; then
+            echo "no $DB_DIR/compile_commands.json: have the build write it, or set clang-tidy: false" >&2
+            exit 1
+          fi
+          clang-tidy --version
+          "$(dirname "$(readlink -f "$(command -v clang-tidy)")")/run-clang-tidy" \
+            -p "$DB_DIR" -quiet -warnings-as-errors='*' -header-filter='.*' \
+            -extra-arg=-Wdocumentation \
+            -extra-arg=-Wno-unknown-warning-option \
+            -extra-arg=-Wno-unused-command-line-argument \
+            "$FILES"
 
       # No `| head`. The runner runs steps under `bash -e -o pipefail`, so a
       # truncating pipe is a failure waiting for enough output: `head` closes
