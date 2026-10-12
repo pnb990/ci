@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Checks that the runner's copy of a floating tag is the image the registry
+# has under that tag now. For a canary (check-image-bump.yaml), as a job the
+# ones using the same image `needs:`.
+#
+# The runner reuses its cached copy of a tag unless its config.yaml sets
+# `container.force_pull: true`, and a workflow cannot ask for a pull: the
+# container exists before the first step. Without this job, a canary on a
+# stale `ci-latest` tests an old image and fails, if at all, on whatever tool
+# that image lacks -- on cobs and crc, 2026-10-12, a 2026-10-04 image without
+# clang-format, with nothing pointing at the runner.
+#
+# It compares, on Docker Hub, the tag's digest with the digest of the commit
+# tag the image's /etc/image-info names. A commit tag names its build, so it
+# passes without a lookup. The check runs in its own job: with several
+# runners, each with its own cache, it would vouch for one of them only.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image on Docker Hub, with its floating tag:
+          `pnb990/python3:ci-latest`.
+        type: string
+        required: true
+
+jobs:
+  image-fresh:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+    steps:
+      - name: Check ${{ inputs.image }} against Docker Hub
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          cat /etc/image-info
+          . /etc/image-info
+          tag=${IMAGE##*:}
+          commit_tag=$IMAGE_VARIANT-$IMAGE_COMMIT
+          digest() {
+            json=$(curl -fsS "https://hub.docker.com/v2/repositories/${IMAGE%:*}/tags/$1") || {
+              echo "cannot read ${IMAGE%:*}:$1 on Docker Hub" >&2
+              return 1
+            }
+            printf '%s' "$json" |
+              python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])'
+          }
+          if [ "$tag" != "$commit_tag" ]; then
+            floating=$(digest "$tag")
+            stamped=$(digest "$commit_tag")
+            if [ "$floating" != "$stamped" ]; then
+              echo "stale image: $IMAGE on Docker Hub is no longer $commit_tag;" >&2
+              echo "the runner ran its cached copy. Set container.force_pull: true in" >&2
+              echo "its config.yaml, or docker pull $IMAGE on its host." >&2
+              exit 1
+            fi
+          fi
+          echo "$IMAGE is current on Docker Hub"
