@@ -97,6 +97,14 @@ the pin left behind. The image pin and the `soft-lib/ci` pin moved in the same
 commit, per project. The rename touched 18 files in three repositories, and
 zero in the projects that were already callers.
 
+The stamp says which build a container runs, not whether a floating tag still
+points at it. The runner reuses its cached copy of a tag unless its
+`config.yaml` sets `container.force_pull: true`, so the cobs and crc canaries
+once ran a week-old `ci-latest` and failed on a missing `clang-format`, with
+nothing pointing at the runner (2026-10-12). `image-fresh.yaml` is the check:
+a canary job per image, which the jobs using that image `needs:`. It stays out
+of the other workflows, which their callers pin to a commit tag.
+
 ## Forgejo behaviour worth knowing
 
 - **Workflows cannot be inherited.** A workflow file must exist in the

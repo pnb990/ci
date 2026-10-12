@@ -77,11 +77,14 @@ there and rolling it back is a `git revert` there.
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 | `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required); secret `PACKAGE_TOKEN` |
+| `image-fresh.yaml` | — | `image` (required) |
 
 A python project calls the first two, and gets the two results it had before. A
 project with no python calls only `lint-reuse.yaml`, with `pinned: false`. A
 project with markdown to keep tidy — a documentation repository above all —
-adds `markdown-lint.yaml`, configured by its own `.markdownlint.yaml`.
+adds `markdown-lint.yaml`, configured by its own `.markdownlint.yaml`. A
+canary on `ci-latest` (`check-image-bump.yaml`) calls `image-fresh.yaml` once
+per image, and makes the jobs using that image `needs:` it.
 
 `python-checks.yaml` runs four tools, one step each: `ruff check`, `ruff format
 --check`, `pylint` and `pyright`. They are not optional and there is no input
