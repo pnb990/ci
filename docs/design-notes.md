@@ -123,8 +123,10 @@ zero in the projects that were already callers.
   GitHub mirror should carry the code, not the workflows.
 - **Reading runs through the API**: `/api/v1/repos/{o}/{r}/actions/runs`
   (per workflow, `index_in_repo` is the number in the run URL) and
-  `/actions/tasks` (per job, `name` + `status`). There is no log API on 15.x:
-  the log is two clicks in the web UI.
+  `/actions/tasks` (per job, `name` + `status`). There is no log API on 15.x,
+  but on a public repository the raw log of a job is readable without a login
+  at `/{o}/{r}/actions/runs/{index_in_repo}/jobs/{n}/attempt/1/logs` (`n`
+  counts from 0; a called workflow's real job is `1`, after the wrapper).
 - Requires Forgejo 15.0.6 / runner v13 (see README): a reusable workflow called
   from a dynamic matrix needs forgejo#10647.
 
@@ -143,6 +145,43 @@ when there is enough output: two files pass, 3786 files of doxygen do not.
   last twenty lines named the cause.
 - Never truncate with a pipe under `pipefail`; count instead
   (`find … | wc -l` reads to the end).
+
+## Debian packages: `deb-build.yaml`
+
+- **One input, on purpose.** Build command, test command, artifact path and
+  version are all derivable from `debian/` (`build-dep ./`,
+  `dpkg-buildpackage -b`, `../*.deb`, `dpkg-parsechangelog`), so they are not
+  inputs. A package that needs something else changes its `debian/`, as it
+  would for Debian.
+- **Checkout into `source/`.** dpkg-buildpackage always writes its results in
+  `..` (the `.deb`s come from `dh_builddeb`, whose `--destdir` belongs to the
+  package's `debian/rules`), and the `.changes` names its files without a
+  path, so they must stay together. With the tree one level down, `..` is the
+  job's workspace: the results land there with nothing else, as in sbuild and
+  salsa-ci. A first version built in the workspace root and moved `../*.deb`
+  into `out/`, i.e. globbed the runner's directory of all the owner's
+  workspaces (review of #13).
+- **The image carries the tools, not the package's dependencies.**
+  `debian-pkg` has build-essential (which `dpkg-buildpackage` requires even
+  for `Architecture: all`), debhelper, lintian and autopkgtest; Build-Depends
+  are installed per job. Before it, a caller on `node:24-trixie` failed on
+  `unmet build dependencies: build-essential:native`.
+- **autopkgtest `null`**: the job's container is already disposable, so the
+  tests run in it rather than in a nested testbed. `null` cannot revert the
+  system, so a test declaring `Restrictions: breaks-testbed` is skipped, and
+  all tests skipped is exit 8: a red job. Purging the package is not breaking
+  the testbed; leave that restriction out.
+- **Install and purge before autopkgtest** (piuparts' order). autopkgtest
+  installs the package itself and a test may purge it, after which apt no
+  longer knows the local `.deb` (`Unable to locate package`): nothing may
+  touch the package after it. First found on yt-add-music-beet's
+  `install-purge` test.
+- **Secrets cross `workflow_call`** only when the caller passes them
+  (`secrets: PACKAGE_TOKEN: …` or `secrets: inherit`); the workflow declares
+  the secret as optional and fails the publish step if a tag arrives without
+  it.
+- **Tag = changelog version** (DEP-14 mangling of `~` and `:`). A registry
+  version is immutable (409), so a rebuild is a new changelog entry.
 
 ## Ruled out
 
