@@ -76,7 +76,7 @@ there and rolling it back is a `git revert` there.
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
-| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`; secret `PACKAGE_TOKEN` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
 A python project calls the first two, and gets the two results it had before. A

@@ -63,6 +63,14 @@
           checksums of the tarballs, so pinning it pins them all.
         type: string
         default: ""
+      dch-force-bad-version:
+        description: >-
+          Pass --force-bad-version to dch, with `dsc`: a ~bpo version sorts
+          before the one it backports (newer than the image's own package,
+          older than the original, as every Debian backport), and dch refuses
+          a lower entry without it.
+        type: boolean
+        default: false
 
 jobs:
   deb-build:
@@ -118,6 +126,7 @@ jobs:
           . /etc/os-release
           cd source
           dch --newversion "$(dpkg-parsechangelog -S Version)~bpo${VERSION_ID}+1" \
+              ${{ inputs.dch-force-bad-version && '--force-bad-version' || '' }} \
               --distribution "${VERSION_CODENAME}-backports" --force-distribution \
               "Rebuild for ${VERSION_CODENAME}-backports."
 
