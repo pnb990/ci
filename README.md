@@ -76,7 +76,7 @@ there and rolling it back is a `git revert` there.
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
-| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required); secret `PACKAGE_TOKEN` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
 A python project calls the first two, and gets the two results it had before. A
@@ -149,6 +149,14 @@ jobs:
     secrets:
       PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
 ```
+
+A backport has no `debian/` of its own: `dsc` gives the URL of a Debian
+source package on snapshot.debian.org, which keeps every version the archive
+drops, and `dsc-sha256` pins it. The job fetches the `.dsc` and its tarballs,
+checks them, extracts them and adds a `~bpo<release>+1` entry for the image's
+`<codename>-backports`; the steps after are the same, the package's own tests
+included. The tag is then the backport's version, DEP-14 mangled:
+`v1%2.53.0-1_bpo13+1`.
 
 How a project becomes a caller, the pin rules, and what was learnt while
 converting the first projects: [docs/design-notes.md](docs/design-notes.md).
