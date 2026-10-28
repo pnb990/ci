@@ -76,7 +76,7 @@ there and rolling it back is a `git revert` there.
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
-| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`; secret `PACKAGE_TOKEN` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
 A python project calls the first two, and gets the two results it had before. A
@@ -135,10 +135,11 @@ to know.
 because a Debian package already describes itself: Build-Depends in
 `debian/control`, version in `debian/changelog`, tests in `debian/tests/`. It
 runs what Debian runs on a package — `apt-get build-dep`, `dpkg-buildpackage`,
-lintian (warnings fail), install and purge, autopkgtest with the `null` backend —
-and uploads the `.deb`s as `<source>-deb`. On a `v*` tag matching the
-changelog version, it publishes them to the owner's Debian registry, in the
-image's codename and component `main`. The caller passes the token:
+lintian (warnings fail by default), install and purge, autopkgtest with the
+`null` backend — and uploads the `.deb`s as `<source>-deb`. On a `v*` tag
+matching the changelog version, it publishes them to the owner's Debian
+registry, in the image's codename and component `main`. The caller passes the
+token:
 
 ```yaml
 jobs:
@@ -156,7 +157,23 @@ drops, and `dsc-sha256` pins it. The job fetches the `.dsc` and its tarballs,
 checks them, extracts them and adds a `~bpo<release>+1` entry for the image's
 `<codename>-backports`; the steps after are the same, the package's own tests
 included. The tag is then the backport's version, DEP-14 mangled:
-`v1%2.53.0-1_bpo13+1`.
+`v1%2.53.0-1_bpo13+1`. The caller says everything the job cannot guess:
+`dch-force-bad-version: true`, since a `~bpo` version is lower than the one
+it backports; the entry's author, `debfullname` and `debemail`, from
+organisation variables, as a job sees no address but the forge's internal
+one; and `lintian-fail-on: error` when the warnings come from Debian's own
+`debian/`, which a backport does not change:
+
+```yaml
+    with:
+      image: pnb990/debian-pkg:ci-<sha>
+      dsc: https://snapshot.debian.org/archive/debian/<date>/pool/main/g/git/git_2.53.0-1.dsc
+      dsc-sha256: <sha256 of the .dsc>
+      dch-force-bad-version: true
+      debfullname: ${{ vars.DEBFULLNAME }}
+      debemail: ${{ vars.DEBEMAIL }}
+      lintian-fail-on: error
+```
 
 How a project becomes a caller, the pin rules, and what was learnt while
 converting the first projects: [docs/design-notes.md](docs/design-notes.md).

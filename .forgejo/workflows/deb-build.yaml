@@ -71,6 +71,26 @@
           a lower entry without it.
         type: boolean
         default: false
+      debfullname:
+        description: >-
+          Name of the backport's changelog entry, required with `dsc`:
+          the job knows no name of the caller's.
+        type: string
+        default: ""
+      debemail:
+        description: >-
+          Address of the backport's changelog entry, required with `dsc`,
+          such as an organisation variable (`vars.DEBEMAIL`): lintian rejects
+          a localhost or IP address, and a job sees no other.
+        type: string
+        default: ""
+      lintian-fail-on:
+        description: >-
+          lintian's --fail-on. A backport of an archive package may pass
+          `error`: its warnings come from Debian's own debian/ and stay in
+          the log.
+        type: string
+        default: "error,warning"
 
 jobs:
   deb-build:
@@ -105,14 +125,13 @@ jobs:
         env:
           DSC: ${{ inputs.dsc }}
           DSC_SHA256: ${{ inputs.dsc-sha256 }}
-          DEBFULLNAME: ${{ github.repository_owner }}
+          DEBFULLNAME: ${{ inputs.debfullname }}
+          DEBEMAIL: ${{ inputs.debemail }}
         run: |
-          if [ -z "$DSC_SHA256" ]; then
-              echo "::error::dsc given without dsc-sha256"
+          if [ -z "$DSC_SHA256" ] || [ -z "$DEBFULLNAME" ] || [ -z "$DEBEMAIL" ]; then
+              echo "::error::dsc needs dsc-sha256, debfullname and debemail"
               exit 1
           fi
-          # The forge's own host: lintian flags a localhost address.
-          export DEBEMAIL="${DEBFULLNAME}@${GITHUB_SERVER_URL#*://}"
           apt-get update
           apt-get install -y --no-install-recommends curl devscripts
           dsc=$(basename "$DSC")
@@ -152,10 +171,12 @@ jobs:
           done
           echo "source=$(dpkg-parsechangelog -S Source)" >> "$FORGEJO_OUTPUT"
 
-      # Warnings fail too: Debian treats them as bugs, and a warning left in
-      # becomes the noise that hides the next one.
+      # Warnings fail too by default: Debian treats them as bugs, and a
+      # warning left in becomes the noise that hides the next one.
       - name: Lintian
-        run: lintian --allow-root --fail-on error,warning ./*.changes
+        env:
+          FAIL_ON: ${{ inputs.lintian-fail-on }}
+        run: lintian --allow-root --fail-on "$FAIL_ON" ./*.changes
 
       # The maintainer scripts' test, in piuparts' order: install, then purge,
       # before autopkgtest. Non-interactive: debconf takes every default, as
