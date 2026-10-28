@@ -130,15 +130,13 @@ jobs:
           apt-get update
           apt-get build-dep -y ./
 
-      # dh_auto_test runs the package's unit tests here. -J passes
-      # parallel=<cpus> in DEB_BUILD_OPTIONS, which a package that does not
-      # build in parallel ignores: a suite like git's otherwise runs on one
-      # core.
+      # dh_auto_test runs the package's unit tests here, on one core: no -J,
+      # the runner shares its host with other services.
       - name: Build
         id: build
         working-directory: source
         run: |
-          dpkg-buildpackage -us -uc -b -J
+          dpkg-buildpackage -us -uc -b
           for deb in ../*.deb; do
               dpkg-deb --info "$deb"
               dpkg-deb --contents "$deb"
