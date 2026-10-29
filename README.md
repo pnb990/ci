@@ -76,7 +76,7 @@ there and rolling it back is a `git revert` there.
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
-| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
 A python project calls the first two, and gets the two results it had before. A
@@ -173,6 +173,29 @@ one; and `lintian-fail-on: error` when the warnings come from Debian's own
       debfullname: ${{ vars.DEBFULLNAME }}
       debemail: ${{ vars.DEBEMAIL }}
       lintian-fail-on: error
+```
+
+A dependency outside the image's distribution comes from `apt-sources`,
+deb822 stanzas added before the first `apt-get update`, and
+`apt-preferences`, the pins that make apt take it: a backports suite has
+priority 100, below the release's 500. A Debian suite is signed by the
+archive keyring the image already has; any other repository carries its
+ASCII-armored key inline in `Signed-By:` (continuation lines, an empty line
+written ` .`), so the job fetches nothing to decide what to trust:
+
+```yaml
+    with:
+      image: pnb990/debian-pkg:ci-<sha>
+      apt-sources: |
+        Types: deb
+        URIs: http://deb.debian.org/debian
+        Suites: trixie-backports
+        Components: main
+        Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+      apt-preferences: |
+        Package: yt-dlp
+        Pin: release n=trixie-backports
+        Pin-Priority: 500
 ```
 
 How a project becomes a caller, the pin rules, and what was learnt while
