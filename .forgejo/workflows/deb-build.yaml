@@ -38,6 +38,11 @@
 # A backport has no `debian/` of its own: the caller gives the URL of a
 # Debian source package (`dsc`) and its sha256, and that package is
 # rebuilt for the image's distribution, under a `~bpo<release>+1` entry.
+#
+# A dependency outside the image's distribution (a backport, a vendor
+# repository) comes from `apt-sources`, deb822 stanzas whose key, if not
+# Debian's, is inline in `Signed-By:`: nothing is fetched to decide what to
+# trust, the caller's workflow file is the trust, like the image pin.
 
 "on":
   workflow_call:
@@ -91,6 +96,23 @@
           the log.
         type: string
         default: "error,warning"
+      apt-sources:
+        description: >-
+          Extra apt sources, as deb822 stanzas, added before the first
+          `apt-get update` (build dependencies, install and autopkgtest).
+          A Debian suite such as `<codename>-backports` uses
+          `Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp`; any
+          other repository puts its ASCII-armored key in `Signed-By:`, one
+          continuation line each, an empty line written ` .`.
+        type: string
+        default: ""
+      apt-preferences:
+        description: >-
+          apt pins, in apt_preferences(5) format, written with
+          `apt-sources`: a backports suite has priority 100, so apt never
+          takes a version from it without a pin.
+        type: string
+        default: ""
 
 jobs:
   deb-build:
@@ -103,6 +125,23 @@ jobs:
         run: |
           cat /etc/image-info 2>/dev/null \
             || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
+
+      # Through the environment, never expanded into the script: the inputs
+      # are text, and are printed so the log shows what was trusted.
+      - name: Extra apt sources
+        if: inputs.apt-sources != '' || inputs.apt-preferences != ''
+        env:
+          APT_SOURCES: ${{ inputs.apt-sources }}
+          APT_PREFERENCES: ${{ inputs.apt-preferences }}
+        run: |
+          if [ -n "$APT_SOURCES" ]; then
+              printf '%s\n' "$APT_SOURCES" > /etc/apt/sources.list.d/caller.sources
+              cat /etc/apt/sources.list.d/caller.sources
+          fi
+          if [ -n "$APT_PREFERENCES" ]; then
+              printf '%s\n' "$APT_PREFERENCES" > /etc/apt/preferences.d/caller
+              cat /etc/apt/preferences.d/caller
+          fi
 
       # Into `source/`, as sbuild and salsa-ci do: dpkg-buildpackage writes
       # its results next to the source tree, in `..`, and has no option to
