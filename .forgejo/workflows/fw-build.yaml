@@ -4,125 +4,72 @@
 
 ---
 
-# Builds a firmware configuration inside the toolchain image. One job, one
-# build command, optionally one artifact.
-#
-# This is the single copy of what `build-firmware.yaml` and `build-doc.yaml`
-# repeated across the projects -- which was the question this whole exercise
-# started from. The steps around the build are identical everywhere; what
-# differs is the command in the middle, so that command is the input.
-#
-# What deliberately does NOT live here:
-#
-#   * the matrix, and the `prepare` job that computes it. That is where the two
-#     build systems actually diverge -- pnbchrono asks cmake for its presets,
-#     domo lists targets -- and a shared workflow that tried to cover both
-#     would be a switch statement pretending to be a workflow. The caller keeps
-#     its matrix and passes one expanded value per job.
-#
-#   * the trigger, and the image pin. Both belong to the project they gate.
-#
-#   * the build's environment. `ARM_TOOLCHAIN_DIR` is what the image publishes;
-#     `TOOLCHAIN_STM32_DIR` is what an STM32 CMakeLists or Makefile reads, and
-#     the mapping between the two is project knowledge. Exporting it here would
-#     put one project's vocabulary into the shared copy and quietly make STM32
-#     the only kind of build that fits. The caller exports what it needs, as
-#     the first line of `build`.
+# Builds one firmware configuration inside the toolchain image, optionally
+# uploading an artifact. The caller keeps its matrix, its trigger, the image
+# pin and the build's environment: those are project knowledge.
 
 "on":
   workflow_call:
     inputs:
       image:
-        description: >-
-          Full reference of the toolchain image, pinned to a commit tag. Stays
-          in the calling project: a pin is a commit in the repository it
-          protects. The `doc` variant is just another value here.
+        description: Toolchain image, pinned to a commit tag by the caller.
         type: string
         required: true
       build:
         description: >-
-          The build command, run inside the image. Multi-line is fine.
-
-          It runs with the image's own environment and nothing added: exporting
-          whatever the project's build system expects is part of this command.
-          A firmware project on STM32 typically starts it with
-          `export TOOLCHAIN_STM32_DIR="$ARM_TOOLCHAIN_DIR"`, mapping the
-          variable the image publishes onto the one its CMakeLists or Makefile
-          reads. That mapping is project knowledge -- the name on the left
-          belongs to the build system, not to the image -- so it stays with the
-          caller.
+          The build command, multi-line allowed. It exports what the project's
+          build system needs, e.g.
+          `export TOOLCHAIN_STM32_DIR="$ARM_TOOLCHAIN_DIR"`.
         type: string
         required: true
       matrix-value:
         description: >-
-          The expanded matrix value this job was given --
-          `${{ matrix.preset }}`, `${{ matrix.target }}`. Passed only so the
-          guard below can check it is not empty; nothing else reads it.
+          The expanded matrix value (`${{ matrix.preset }}`); names the job
+          and is checked by `require-matrix`.
         type: string
         default: ""
       require-matrix:
         description: >-
-          Whether an empty `matrix-value` is a failure. It takes two inputs
-          rather than one because an empty string is genuinely ambiguous: it is
-          what a caller with no matrix sends, and it is also what a matrix that
-          failed to expand sends. Only the caller knows which. `build-doc` has
-          no matrix and leaves this false; `build-firmware` sets it.
+          Fail on an empty `matrix-value`: only the caller knows whether empty
+          means "no matrix" or "matrix failed to expand".
         type: boolean
         default: false
       submodules:
-        description: >-
-          Passed to actions/checkout. `recursive` is what a firmware tree with
-          vendored libraries needs, and is the default.
+        description: Passed to actions/checkout.
         type: string
         default: "recursive"
       uv-sync:
         description: >-
-          Whether to install the project's python environment before the
-          build. `true`, the default, is what a firmware tree whose configure
-          step runs python generators needs. `false` for a project with no
-          pyproject.toml at all -- a repository of C libraries, say -- where
-          `uv sync` can only fail. The same opt-out as lint-reuse.yaml's
-          `pinned: false`.
+          Install the project's python environment before the build. `false`
+          for a project with no pyproject.toml.
         type: boolean
         default: true
       clang-tidy:
         description: >-
-          Whether to run clang-tidy over the compilation database once the
-          build has passed, with `-Wdocumentation` added, so a doxygen
-          `@param` that no longer matches its prototype fails the job. On by
-          default, like the linters of python-checks.yaml: an opt-in check is
-          one that ends up running nowhere. Any finding fails the job. The
-          checks are the project's `.clang-tidy`, or clang-tidy's defaults
-          without one. `false` for a job that builds nothing to analyse, such
-          as the doc.
+          Run clang-tidy, with `-Wdocumentation`, over the compilation database
+          after the build. Any finding fails the job.
         type: boolean
         default: true
       compile-commands-dir:
         description: >-
-          Directory holding the `compile_commands.json` the build produced,
-          relative to the checkout. Producing it is the build's job: cmake with
-          `CMAKE_EXPORT_COMPILE_COMMANDS=ON` writes it in the preset's
-          binaryDir, which is what goes here.
+          Directory of the `compile_commands.json` the build wrote, relative to
+          the checkout.
         type: string
         default: "."
       clang-tidy-files:
         description: >-
-          Python regex selecting the files of the database to analyse. The
-          default keeps the C and C++ sources: a firmware database also lists
-          its assembly startup files, which clang-tidy reads as C and rejects.
-          A negative lookahead excludes vendored code, e.g.
-          `^(?!.*/lib_ext/mbedtls/).*\.c$`.
+          Python regex of the database files to analyse. The default skips
+          assembly startup files, which clang-tidy rejects.
         type: string
         default: '\.(c|cc|cpp|cxx)$'
       artifact-name:
-        description: >-
-          Name of the artifact to upload after the build. Empty, the default,
-          means the build produces nothing to keep -- which is the case for
-          every firmware job today; only the doc uploads.
+        description: Name of the artifact to upload; empty uploads nothing.
         type: string
         default: ""
       artifact-path:
-        description: Path to upload. Required when artifact-name is set.
+        description: >-
+          What to upload, as upload-artifact reads it: one path or glob per
+          line, `**` allowed. Required when artifact-name is set.
         type: string
         default: ""
       artifact-retention-days:
@@ -132,39 +79,17 @@
 
 jobs:
   fw-build:
-    # The run list shows *this* name on the task that does the work. Without
-    # it, a caller with a matrix produces six tasks all called `fw-build`, and
-    # the caller's own `name: build (${{ matrix.preset }})` lands on the 0 s
-    # wrapper beside them instead -- measured on pnbchrono run 156, where the
-    # six 264-284 s tasks were indistinguishable and the six named ones did no
-    # work. So the value the caller passes for the guard is also what labels
-    # the job.
-    #
-    # It reads a little redundantly for a caller with no matrix ("fw-build "),
-    # which is the price of not needing a second input to say the same thing
-    # twice.
+    # Without it, every matrix job of the caller is listed as `fw-build`.
     name: fw-build ${{ inputs.matrix-value }}
 
-    # node for the JavaScript actions, git, uv, cmake/ninja/make and the ARM
-    # toolchain all come from the image, built by soft-lib/docker-images.
-    # Pinned to a commit tag by the caller, not to `ci-latest`: a workflow that
-    # gates a push must not be able to break on a commit that has nothing to do
-    # with it. check-image-bump.yaml is what says when the bump is safe.
     runs-on: debian
     container:
       image: ${{ inputs.image }}
 
     steps:
-      # First step of the job, before anything expensive: an unexpanded matrix
-      # is an infrastructure failure, and without this check it reaches the
-      # build as a bare `cmake --preset`, whose "No preset specified" reads
-      # like a project error and sends the reader looking at the image.
-      #
-      # act_runner v13.0.0 evaluates `strategy.matrix` when it plans the
-      # workflow, before a `prepare` job has published its outputs, so a
-      # `fromJSON(needs.prepare.outputs.…)` matrix can see an empty value and
-      # yield one job with an empty entry instead of failing. This is the one
-      # copy of a guard that used to sit in each project.
+      # act_runner can plan a dynamic matrix before its `prepare` job has
+      # published, giving one job with an empty value: fail here, not with a
+      # confusing "No preset specified" from the build.
       - name: Check the matrix expanded
         if: inputs.require-matrix && inputs.matrix-value == ''
         run: |
@@ -172,15 +97,6 @@ jobs:
           echo "Check the 'Detected …' line of the prepare job." >&2
           exit 1
 
-      # The tag is already the commit here, but the stamp is what proves the
-      # image really is that build, and it is the same step as in
-      # check-image-bump.yaml, where the tag floats.
-      #
-      # The `||` does not fail the job, and its message names the one cause
-      # that is actionable. /etc/image-info replaced /etc/pnb-image in
-      # docker-images, in a single round with no transition: an image missing
-      # it is either older than the stamp itself, or a pin that was not bumped
-      # along with the rename.
       - name: Image provenance
         run: |
           cat /etc/image-info 2>/dev/null \
@@ -191,43 +107,20 @@ jobs:
         with:
           submodules: ${{ inputs.submodules }}
 
-      # The configure step of a firmware build runs the python generators, so
-      # the environment is needed even when the build itself is pure cmake.
-      #
-      # --locked, not --frozen: --frozen installs a lock that no longer matches
-      # pyproject.toml without a word. See the longer note in
-      # python-checks.yaml.
+      # --locked, not --frozen: --frozen silently installs a stale lock.
       - name: Install dependencies
         if: inputs.uv-sync
         run: uv sync --dev --locked
 
-      # Nothing is exported here. The variables a build needs are named by the
-      # project's build system, not by this workflow: TOOLCHAIN_STM32_DIR is an
-      # STM32 CMake/Makefile convention, and hard-coding it would put one
-      # project's vocabulary into the shared copy and quietly make it the only
-      # kind of build that fits. The caller exports what it needs, as the first
-      # line of `build`.
-      # The matrix value is in the step name too, and not only in the job name
-      # above: the job name is what Forgejo decides to render, the step name is
-      # what the log page shows whatever it decides. One of the two always
-      # says which configuration this was.
+      # The matrix value is in the step name too: Forgejo does not always
+      # render the job name.
       - name: Build ${{ inputs.matrix-value }}
         run: ${{ inputs.build }}
 
-      # clang-tidy rather than a clang build: -Wdocumentation is clang-only,
-      # gcc rejects it, and clang-tidy reports compiler warnings as
-      # clang-diagnostic-* from the very database the gcc build wrote.
-      #
-      # run-clang-tidy is not on the PATH (Debian ships it as
-      # run-clang-tidy-<version>); it sits next to the real clang-tidy, which
-      # keeps the clang version out of this file.
-      #
-      # -header-filter, because doxygen comments live on the declaration: by
-      # default clang-tidy keeps quiet about headers, which is where they are.
-      # The two -Wno- silence what clang says about gcc-only options of a cross
-      # database, not about the code. Measured on pnbchrono, 2026-10-12: 524
-      # unused-command-line-argument lines without them, 79 documentation
-      # findings in the sources and 7 more in the headers once filtered in.
+      # clang-tidy, not a clang build: -Wdocumentation is clang-only, and
+      # clang-tidy reads the database the gcc build wrote. -header-filter
+      # because doxygen lives in the headers; the two -Wno- silence clang about
+      # gcc-only options of a cross database.
       - name: clang-tidy ${{ inputs.matrix-value }}
         if: inputs.clang-tidy
         env:
@@ -239,6 +132,7 @@ jobs:
             exit 1
           fi
           clang-tidy --version
+          # run-clang-tidy is not on the PATH: it sits next to the real clang-tidy.
           "$(dirname "$(readlink -f "$(command -v clang-tidy)")")/run-clang-tidy" \
             -p "$DB_DIR" -quiet -warnings-as-errors='*' -header-filter='.*' \
             -extra-arg=-Wdocumentation \
@@ -246,45 +140,33 @@ jobs:
             -extra-arg=-Wno-unused-command-line-argument \
             "$FILES"
 
-      # No `| head`. The runner runs steps under `bash -e -o pipefail`, so a
-      # truncating pipe is a failure waiting for enough output: `head` closes
-      # the pipe after ten lines, `ls` takes SIGPIPE and exits 141, and
-      # pipefail promotes that to the step's status. It cost this workflow a
-      # red build-doc and six rounds of probing the uploader, which was never
-      # involved -- the log said `exitcode '141'` and
-      # `skipping post step for 'Upload artifact'; main step was skipped`.
-      #
-      # The trap is that it only fires when the listing is long enough. A
-      # directory of two files passes; 3786 files of doxygen do not.
-      #
-      # `wc -l` reads its input to the end, so nothing truncates, and the count
-      # is the more useful number anyway.
+      # Expands artifact-path the way the upload does, so a pattern matching
+      # nothing fails here with its name. No `| head`: under pipefail, a
+      # truncated pipe fails the step once the listing is long.
       - name: Show what was produced
         if: inputs.artifact-name != ''
+        shell: bash
+        env:
+          ARTIFACT_PATH: ${{ inputs.artifact-path }}
         run: |
-          du -sh -- "${{ inputs.artifact-path }}"
-          echo "$(find "${{ inputs.artifact-path }}" -type f | wc -l) files"
+          shopt -s globstar nullglob
+          # One pattern per line: the unquoted expansion below globs, never splits.
+          IFS=$'\n'
+          paths=()
+          while read -r pattern; do
+            [ -n "$pattern" ] || continue
+            matches=($pattern)
+            if [ "${#matches[@]}" -eq 0 ]; then
+              echo "artifact-path: nothing matches '$pattern'" >&2
+              exit 1
+            fi
+            paths+=("${matches[@]}")
+          done <<< "$ARTIFACT_PATH"
+          du -shc -- "${paths[@]}" | tail -n 1
+          echo "$(find "${paths[@]}" -type f | wc -l) files"
 
-      # **Forgejo's fork**, not `actions/upload-artifact`. GitHub's own v4
-      # action carries a check that refuses to run anywhere but github.com, so
-      # it fails here in four seconds without attempting an upload. Forgejo
-      # maintains the same action with that check removed.
-      #
-      # The comment that stood here proposed dropping to `@v3` "if the instance
-      # is too old for the v4 artifact API". That reading was wrong: this
-      # Forgejo is 15.0.6, server-side v4 artifacts landed in 7.0 and the
-      # large-upload fix in 9.0. `+gitea-1.22.0` in the version string is an
-      # API compatibility marker, not the version.
-      #
-      # Measured, soft-lib/ci runs 2 and 3, 2026-08-22: github v4 fails in five
-      # seconds without attempting anything, while fork v4 and fork v5 both
-      # succeed, including with 20 MB of incompressible bytes. That size test
-      # is not padding -- a JSON-parsing bug broke uploads over ~8 MB until
-      # Forgejo 9.0, and what this step uploads is 75 MB of doxygen.
-      #
-      # v5 because both tags are equally evidenced and v5 is 21 months newer:
-      # v4.3.1 is from 2024-03-21, v5 from 2025-12-29. There is no v6 -- only
-      # an untagged `branch-v6`, and a branch is not something to pin.
+      # Forgejo's fork: GitHub's upload-artifact refuses to run outside
+      # github.com.
       - name: Upload artifact
         if: inputs.artifact-name != ''
         uses: https://code.forgejo.org/forgejo/upload-artifact@v5
