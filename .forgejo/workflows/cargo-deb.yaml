@@ -1,0 +1,223 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Packages a Rust program published on crates.io as Debian packages, one per
+# target (amd64 and arm64 by default), checks them, and on a release tag
+# publishes them to the owner's Debian registry on this forge.
+#
+# For a program Debian does not ship, or ships too old, and whose upstream
+# publishes no .deb (defmt-print, probe-rs): the crate is fetched at a pinned
+# sha256, built with its own Cargo.lock (`--locked`), and packaged by
+# cargo-deb. deb-build.yaml is the other way, for a full Debian source
+# package; Debian's cargo is too old for most crates.io releases.
+#
+#   fetch -> debian/ -> cargo deb per target -> lintian -> install -> test
+#   -> purge -> publish
+#
+# The image is `deb-rust:ci` from soft-lib/docker-images: the Rust toolchain,
+# the arm64 cross gcc (cargo's linker for that target), cargo-deb, lintian.
+# arm64 is cross-compiled on the amd64 runner, which cannot run it: only the
+# runner's own architecture is installed and tested.
+#
+# What makes the package Debian's rather than cargo's is the caller's
+# `debian/`, copied into the crate:
+#
+#   debian/cargo-deb.toml   its `[package.metadata.deb]` table, appended to
+#                           the crate's Cargo.toml (maintainer, section,
+#                           assets, `changelog = "debian/changelog"`...)
+#   debian/changelog        the version: `<crate version>-<revision>`
+#   debian/...              whatever the table refers to (copyright,
+#                           lintian-overrides), by `debian/<file>`
+#
+# The crate version is read from the changelog, as deb-build.yaml reads the
+# package's: a new upstream version or a new build is a new changelog entry,
+# and nothing else changes. A crate that ships its own `debian/` or
+# `[package.metadata.deb]` is refused rather than merged.
+#
+# Publishing and its PACKAGE_TOKEN secret work as in deb-build.yaml: only on
+# a `v*` tag, which must be the changelog's version (DEP-14 mangled), and a
+# published version is never overwritten.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image, pinned to a commit tag:
+          `pnb990/deb-rust:ci-<sha>`. Stays in the calling project: a pin is
+          a commit in the repository it protects.
+        type: string
+        required: true
+      crate:
+        description: The crates.io crate to package, e.g. `defmt-print`.
+        type: string
+        required: true
+      crate-sha256:
+        description: >-
+          sha256 of the `.crate` file, the checksum crates.io's index holds
+          for the changelog's version (`cksum`). The .crate holds the
+          Cargo.lock, so pinning it pins every dependency.
+        type: string
+        required: true
+      targets:
+        description: Rust targets to build, space separated.
+        type: string
+        default: "x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu"
+      test-command:
+        description: >-
+          Run once the runner's package is installed, to check that it
+          starts, e.g. `defmt-print --version`. Empty runs nothing.
+        type: string
+        default: ""
+      lintian-fail-on:
+        description: lintian's --fail-on.
+        type: string
+        default: "error,warning"
+
+jobs:
+  cargo-deb:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+
+    steps:
+      - name: Image provenance
+        run: |
+          cat /etc/image-info 2>/dev/null \
+            || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          path: caller
+
+      # Through the environment, never expanded into the script: the inputs
+      # are text. The revision is everything after the last `-`, as Debian
+      # splits a version.
+      - name: Fetch the crate
+        id: fetch
+        env:
+          CRATE: ${{ inputs.crate }}
+          CRATE_SHA256: ${{ inputs.crate-sha256 }}
+        run: |
+          debversion=$(dpkg-parsechangelog -l caller/debian/changelog -S Version)
+          VERSION=${debversion%-*}
+          VERSION=${VERSION#*:}
+          echo "revision=${debversion##*-}" >> "$FORGEJO_OUTPUT"
+          file="$CRATE-$VERSION.crate"
+          curl --fail --silent --show-error --location --output "$file" \
+              "https://static.crates.io/crates/$CRATE/$file"
+          echo "$CRATE_SHA256  $file" | sha256sum --check
+          tar xzf "$file"
+          mv "$CRATE-$VERSION" source
+          test -f source/Cargo.lock \
+              || { echo "::error::$file has no Cargo.lock: --locked cannot pin its dependencies"; exit 1; }
+
+      - name: Debian metadata
+        run: |
+          if [ -e source/debian ] || grep -q '^\[package\.metadata\.deb' source/Cargo.toml; then
+              echo "::error::the crate has its own debian/ or [package.metadata.deb]"
+              exit 1
+          fi
+          grep -q '^\[package\.metadata\.deb\]' caller/debian/cargo-deb.toml \
+              || { echo "::error::debian/cargo-deb.toml has no [package.metadata.deb] table"; exit 1; }
+          cp -r caller/debian source/debian
+          { echo; cat source/debian/cargo-deb.toml; } >> source/Cargo.toml
+          cat source/debian/cargo-deb.toml
+
+      # One core, as deb-build: the runner shares its host with other
+      # services. cargo-deb takes no --jobs, cargo does, after `--`.
+      - name: Build
+        id: build
+        env:
+          TARGETS: ${{ inputs.targets }}
+          REVISION: ${{ steps.fetch.outputs.revision }}
+        run: |
+          mkdir debs
+          for target in $TARGETS; do
+              cargo deb --locked \
+                  --manifest-path source/Cargo.toml \
+                  --target "$target" \
+                  --deb-revision "$REVISION" \
+                  --output debs/ \
+                  -- --jobs 1
+          done
+          for deb in debs/*.deb; do
+              dpkg-deb --info "$deb"
+              dpkg-deb --contents "$deb"
+          done
+          echo "package=$(dpkg-deb -f "$(ls debs/*.deb | head -n 1)" Package)" >> "$FORGEJO_OUTPUT"
+
+      - name: Lintian
+        env:
+          FAIL_ON: ${{ inputs.lintian-fail-on }}
+        run: lintian --allow-root --fail-on "$FAIL_ON" debs/*.deb
+
+      - name: Install
+        id: install
+        run: |
+          arch=$(dpkg --print-architecture)
+          for deb in debs/*.deb; do
+              if [ "$(dpkg-deb -f "$deb" Architecture)" = "$arch" ]; then
+                  echo "deb=$deb" >> "$FORGEJO_OUTPUT"
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y "./$deb"
+                  exit 0
+              fi
+          done
+          echo "::error::no package for the runner's architecture $arch"
+          exit 1
+
+      - name: Test
+        if: inputs.test-command != ''
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: sh -c "$TEST_COMMAND"
+
+      - name: Purge
+        env:
+          DEB: ${{ steps.install.outputs.deb }}
+        run: DEBIAN_FRONTEND=noninteractive apt-get purge -y "$(dpkg-deb -f "$DEB" Package)"
+
+      # Forgejo's fork: GitHub's own upload-artifact refuses to run off
+      # github.com (see fw-build.yaml).
+      - name: Upload artifact
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v5
+        with:
+          name: ${{ steps.build.outputs.package }}-deb
+          path: debs/*.deb
+          if-no-files-found: error
+
+      # As deb-build.yaml: the tag is the version after DEP-14 mangling, and
+      # 409 means already published, never overwritten.
+      - name: Publish to the Debian registry
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          REGISTRY: ${{ github.server_url }}/api/packages/${{ github.repository_owner }}/debian
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$PACKAGE_TOKEN" ]; then
+              echo "::error::release tag but no PACKAGE_TOKEN secret passed by the caller"
+              exit 1
+          fi
+          for deb in debs/*.deb; do
+              version=$(dpkg-deb -f "$deb" Version | sed -e 's/~/_/g' -e 's/:/%/g')
+              if [ "$TAG" != "v$version" ]; then
+                  echo "::error::tag $TAG does not match $(basename "$deb")'s version $version"
+                  exit 1
+              fi
+          done
+          . /etc/os-release
+          for deb in debs/*.deb; do
+              status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+                  --header "Authorization: token ${PACKAGE_TOKEN}" \
+                  --upload-file "$deb" "${REGISTRY}/pool/${VERSION_CODENAME}/main/upload")
+              case "$status" in
+                  201) echo "published $(basename "$deb") to ${REGISTRY} ${VERSION_CODENAME}/main" ;;
+                  409) echo "::notice::$(basename "$deb") already published; add a debian/changelog entry to publish a new build" ;;
+                  *) echo "::error::$(basename "$deb"): upload failed, HTTP ${status}"; exit 1 ;;
+              esac
+          done

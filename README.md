@@ -77,6 +77,7 @@ there and rolling it back is a `git revert` there.
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 | `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`; secret `PACKAGE_TOKEN` |
+| `cargo-deb.yaml` | — | `image`, `crate`, `crate-sha256` (required), `targets`, `test-command`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
 A python project calls the first two, and gets the two results it had before. A
@@ -196,6 +197,37 @@ written ` .`), so the job fetches nothing to decide what to trust:
         Package: yt-dlp
         Pin: release n=trixie-backports
         Pin-Priority: 500
+```
+
+`cargo-deb.yaml` packages a Rust program from crates.io that Debian does not
+ship, or ships too old, and whose upstream publishes no `.deb` (defmt-print,
+probe-rs). The image is `pnb990/deb-rust:ci-<sha>`: the Rust toolchain, the
+arm64 cross gcc and cargo-deb. The `.crate` is fetched from crates.io,
+checked against `crate-sha256` (the `cksum` of crates.io's index, which pins
+its `Cargo.lock` and so every dependency) and built with `--locked`, once per
+target, amd64 and arm64 by default: arm64 is cross-compiled on the amd64
+runner, so only the runner's own package is installed, run (`test-command`)
+and purged. Lintian, the `<crate>-deb` artifact and the publishing on a `v*`
+tag are deb-build's.
+
+What makes the package Debian's is the caller's `debian/`, copied into the
+crate: `debian/cargo-deb.toml` holds the `[package.metadata.deb]` table,
+appended to the crate's `Cargo.toml`; `debian/changelog` gives the version,
+`<crate version>-<revision>`, so a new upstream version or a new build is a
+new changelog entry, as with deb-build; the files the table names
+(`debian/copyright`, `debian/lintian-overrides`) come along:
+
+```yaml
+jobs:
+  cargo-deb:
+    uses: soft-lib/ci/.forgejo/workflows/cargo-deb.yaml@<sha>
+    with:
+      image: pnb990/deb-rust:ci-<sha>
+      crate: defmt-print
+      crate-sha256: <cksum of the version in crates.io's index>
+      test-command: defmt-print --version
+    secrets:
+      PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
 ```
 
 How a project becomes a caller, the pin rules, and what was learnt while
