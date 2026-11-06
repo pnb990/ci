@@ -203,10 +203,11 @@ written ` .`), so the job fetches nothing to decide what to trust:
 architectures as well, `arm64` for a Raspberry Pi: the runner is amd64 and
 there is no other. Once the native packages are built, installed and tested,
 the same tree is built again with `dpkg-buildpackage -B -a <arch>` and
-`nocheck`, since the runner cannot run the target's code. What checks the
-result instead is that every ELF of the packages has the machine of an
-object the cross compiler builds, then lintian; the packages join the
-artifact and the publication. The `all` packages stay the native build's.
+`nocheck`, since the runner cannot run the target's code. lintian checks
+the result instead: an ELF built for another architecture, the mark of a
+cross build that used the native compiler, is its error
+`binary-from-other-architecture`. The packages join the artifact and the
+publication; the `all` packages stay the native build's.
 
 The cross build has the `nocheck` profile as well (`-P nocheck`), and
 `apt-get build-dep -a <arch> -P nocheck` installs its dependencies: the

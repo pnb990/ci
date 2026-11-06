@@ -44,8 +44,8 @@
 # `cross-archs` also cross-builds the architecture-dependent packages for
 # other architectures (arm64 for a Raspberry Pi), on this amd64 runner,
 # which has no other: they are built from the same tree once the native ones
-# are built and tested, checked by lintian and by the architecture of every
-# ELF they hold, never run. A package's tests run on the native build only:
+# are built and tested, checked by lintian (an ELF of another architecture
+# is its error binary-from-other-architecture), never run. A package's tests run on the native build only:
 # the cross build has the `nocheck` profile, so its Build-Depends must be
 # cross-annotated (`:native`, `<!nocheck>`, Multi-Arch), by `patches` when
 # Debian's are not.
@@ -302,49 +302,23 @@ jobs:
       # After the native build and its tests, from the same tree, whose
       # `clean` the cross build runs first. `-B`: the `all` packages are the
       # native build's. `nocheck`, option and profile: the runner cannot run
-      # the target's code, so the check is that every ELF has the machine of
-      # an object the cross compiler builds, then lintian. The inputs come
-      # through the environment, as `apt-sources` does.
+      # the target's code. The inputs come through the environment, as
+      # `apt-sources` does.
       - name: Cross-build
         if: inputs.cross-archs != ''
         working-directory: source
-        # find -print0 / read -d '': bash, whatever the image's sh
-        shell: bash
         env:
           CROSS_ARCHS: ${{ inputs.cross-archs }}
           FAIL_ON: ${{ inputs.lintian-fail-on }}
         run: |
           for arch in $CROSS_ARCHS; do
               dpkg --add-architecture "$arch"
-          done
-          apt-get update
-          for arch in $CROSS_ARCHS; do
-              gnu=$(dpkg-architecture -a "$arch" -qDEB_HOST_GNU_TYPE)
+              apt-get update
               apt-get install -y --no-install-recommends "crossbuild-essential-$arch"
               apt-get build-dep -y -a "$arch" -P nocheck ./
               DEB_BUILD_OPTIONS="nocheck${DEB_BUILD_OPTIONS:+ $DEB_BUILD_OPTIONS}" \
                   dpkg-buildpackage -us -uc -B -a "$arch" -P nocheck
-
-              ref=$(mktemp -d)
-              echo 'int main(void) { return 0; }' | "$gnu-gcc" -x c - -o "$ref/ref"
-              machine=$(readelf -h "$ref/ref" | sed -n 's/^ *Machine: *//p')
-              for deb in ../*_"$arch".deb; do
-                  rm -rf "$ref/x" && dpkg-deb -x "$deb" "$ref/x"
-                  find "$ref/x" -type f -print0 | while IFS= read -r -d '' f; do
-                      # not an ELF: readelf fails, which pipefail (the
-                      # runner's bash) would make fatal in the pipe below
-                      readelf -h "$f" > /dev/null 2>&1 || continue
-                      # an archive (.a) gives one Machine per member
-                      m=$(readelf -h "$f" | sed -n 's/^ *Machine: *//p' | sort -u)
-                      if [ "$m" != "$machine" ]; then
-                          echo "::error::$(basename "$deb"): ${f#"$ref/x"} is $m, not $machine"
-                          exit 1
-                      fi
-                  done
-                  echo "$(basename "$deb"): every ELF is $machine"
-              done
-              rm -rf "$ref"
-
+              # binary-from-other-architecture, an error: a failed cross build
               lintian --allow-root --fail-on "$FAIL_ON" ../*_"$arch".changes
           done
 
