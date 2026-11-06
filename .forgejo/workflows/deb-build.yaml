@@ -38,17 +38,17 @@
 # A backport has no `debian/` of its own: the caller gives the URL of a
 # Debian source package (`dsc`) and its sha256, and that package is
 # rebuilt for the image's distribution, under a `~bpo<release>+1` entry.
-# What the backport changes in it is a patch in the caller's repository
-# (`patches`), reviewed as a diff and failing once it no longer applies.
+# What the backport changes in it is patches of the caller's repository
+# (`patches`), reviewed as diffs and failing once they no longer apply.
 #
 # `cross-archs` also cross-builds the architecture-dependent packages for
 # other architectures (arm64 for a Raspberry Pi), on this amd64 runner,
 # which has no other: they are built from the same tree once the native ones
 # are built and tested, checked by lintian (an ELF of another architecture
-# is its error binary-from-other-architecture), never run. A package's tests run on the native build only:
-# the cross build has the `nocheck` profile, so its Build-Depends must be
-# cross-annotated (`:native`, `<!nocheck>`, Multi-Arch), by `patches` when
-# Debian's are not.
+# is its error binary-from-other-architecture), never run. A package's
+# tests run on the native build only: the cross build has the `nocheck`
+# profile, so its Build-Depends must be cross-annotated (`:native`,
+# `<!nocheck>`, Multi-Arch), by `patches` when Debian's are not.
 #
 # A dependency outside the image's distribution (a backport, a vendor
 # repository) comes from `apt-sources`, deb822 stanzas whose key, if not
@@ -132,11 +132,12 @@
         default: ""
       patches:
         description: >-
-          With `dsc`, a directory of the caller's repository whose `*.patch`
-          files are applied to the extracted source, in name order, with
-          `patch -p1`, before any build: Debian's packaging as the backport
-          changes it (Build-Depends cross-annotated, a debian/rules that
-          cross-builds). A package with its own `debian/` changes it there.
+          With `dsc`, patch files of the caller's repository, as paths
+          separated by spaces or newlines, applied in that order to the
+          extracted source with `patch -p1`, before any build: Debian's
+          packaging as the backport changes it (Build-Depends
+          cross-annotated, a debian/rules that cross-builds). A package with
+          its own `debian/` changes it there.
         type: string
         default: ""
 
@@ -230,14 +231,9 @@ jobs:
         env:
           PATCHES: ${{ inputs.patches }}
         run: |
-          set -- ../caller/"$PATCHES"/*.patch
-          if [ ! -f "$1" ]; then
-              echo "::error::no *.patch in $PATCHES"
-              exit 1
-          fi
-          for p in "$@"; do
-              echo "applying ${p#../caller/}"
-              patch -p1 --forward --batch < "$p"
+          for p in $PATCHES; do
+              echo "applying $p"
+              patch -p1 --forward --batch < "../caller/$p"
           done
 
       # `build-dep ./` reads the Build-Depends of the checked-out

@@ -214,17 +214,19 @@ The cross build has the `nocheck` profile as well (`-P nocheck`), and
 package's Build-Depends must be cross-annotated (tools `:native` or
 `Multi-Arch: foreign`, test-only ones `<!nocheck>`), and its `debian/rules`
 must use the cross compiler. A backport whose Debian packaging does not
-gets it from `patches`: a directory of the caller's repository whose
-`*.patch` files are applied with `patch -p1` to the extracted source, in name
-order, before any build. A patch is reviewed as a diff, and fails the job
-once a bump no longer applies it. git-backport's:
+gets it from `patches`: patch files of the caller's repository, listed in
+the order `patch -p1` applies them to the extracted source, before any
+build, as Debian's `debian/patches/series` does. A patch is reviewed as a
+diff, and fails the job once a bump no longer applies it. git-backport's:
 
 ```yaml
     with:
       cross-archs: arm64
       # debian/control: the tools :native; debian/rules: dpkg's
       # buildtools.mk for CC instead of a hard-coded gcc.
-      patches: patches
+      patches: >-
+        patches/native-build-tools.patch
+        patches/cross-cc.patch
 ```
 
 `cargo-deb.yaml` packages a Rust program from crates.io that Debian does not
