@@ -76,7 +76,7 @@ there and rolling it back is a `git revert` there.
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
-| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`; secret `PACKAGE_TOKEN` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`, `patches`, `cross-archs`; secret `PACKAGE_TOKEN` |
 | `cargo-deb.yaml` | — | `image`, `crate`, `crate-sha256` (required), `targets`, `test-command`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
@@ -197,6 +197,36 @@ written ` .`), so the job fetches nothing to decide what to trust:
         Package: yt-dlp
         Pin: release n=trixie-backports
         Pin-Priority: 500
+```
+
+`cross-archs` cross-builds the architecture-dependent packages for other
+architectures as well, `arm64` for a Raspberry Pi: the runner is amd64 and
+there is no other. Once the native packages are built, installed and tested,
+the same tree is built again with `dpkg-buildpackage -B -a <arch>` and
+`nocheck`, since the runner cannot run the target's code. lintian checks
+the result instead: an ELF built for another architecture, the mark of a
+cross build that used the native compiler, is its error
+`binary-from-other-architecture`. The packages join the artifact and the
+publication; the `all` packages stay the native build's.
+
+The cross build has the `nocheck` profile as well (`-P nocheck`), and
+`apt-get build-dep -a <arch> -P nocheck` installs its dependencies: the
+package's Build-Depends must be cross-annotated (tools `:native` or
+`Multi-Arch: foreign`, test-only ones `<!nocheck>`), and its `debian/rules`
+must use the cross compiler. A backport whose Debian packaging does not
+gets it from `patches`: patch files of the caller's repository, listed in
+the order `patch -p1` applies them to the extracted source, before any
+build, as Debian's `debian/patches/series` does. A patch is reviewed as a
+diff, and fails the job once a bump no longer applies it. git-backport's:
+
+```yaml
+    with:
+      cross-archs: arm64
+      # debian/control: the tools :native; debian/rules: dpkg's
+      # buildtools.mk for CC instead of a hard-coded gcc.
+      patches: >-
+        patches/native-build-tools.patch
+        patches/cross-cc.patch
 ```
 
 `cargo-deb.yaml` packages a Rust program from crates.io that Debian does not
