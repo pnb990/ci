@@ -322,9 +322,12 @@ jobs:
               for deb in ../*_"$arch".deb; do
                   rm -rf "$ref/x" && dpkg-deb -x "$deb" "$ref/x"
                   find "$ref/x" -type f -print0 | while IFS= read -r -d '' f; do
+                      # not an ELF: readelf fails, which pipefail (the
+                      # runner's bash) would make fatal in the pipe below
+                      readelf -h "$f" > /dev/null 2>&1 || continue
                       # an archive (.a) gives one Machine per member
-                      m=$(readelf -h "$f" 2>/dev/null | sed -n 's/^ *Machine: *//p' | sort -u)
-                      if [ -n "$m" ] && [ "$m" != "$machine" ]; then
+                      m=$(readelf -h "$f" | sed -n 's/^ *Machine: *//p' | sort -u)
+                      if [ "$m" != "$machine" ]; then
                           echo "::error::$(basename "$deb"): ${f#"$ref/x"} is $m, not $machine"
                           exit 1
                       fi
