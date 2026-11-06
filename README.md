@@ -76,7 +76,7 @@ there and rolling it back is a `git revert` there.
 | `lint-reuse.yaml` | `lint-reuse.yaml` | `image` (required), `submodules`, `pinned` |
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
-| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`; secret `PACKAGE_TOKEN` |
+| `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`, `cross-archs`, `cross-build-depends`, `cross-prepare`; secret `PACKAGE_TOKEN` |
 | `cargo-deb.yaml` | — | `image`, `crate`, `crate-sha256` (required), `targets`, `test-command`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
@@ -197,6 +197,35 @@ written ` .`), so the job fetches nothing to decide what to trust:
         Package: yt-dlp
         Pin: release n=trixie-backports
         Pin-Priority: 500
+```
+
+`cross-archs` cross-builds the architecture-dependent packages for other
+architectures as well, `arm64` for a Raspberry Pi: the runner is amd64 and
+there is no other. Once the native packages are built, installed and tested,
+the same tree is built again with `dpkg-buildpackage -B -a <arch>` and
+`nocheck`, since the runner cannot run the target's code. What checks the
+result instead is that every ELF of the packages has the machine of an
+object the cross compiler builds, then lintian; the packages join the
+artifact and the publication. The `all` packages stay the native build's.
+
+`apt-get build-dep -a <arch>` installs the cross dependencies of a package
+whose Build-Depends are cross-annotated. Many are not (test tools that are
+not `Multi-Arch: foreign`, no `<!nocheck>`): `cross-build-depends` then lists
+the packages to install for the target, the libraries linked in, the native
+build's dependencies standing for the tools. `cross-prepare` is a script run
+in the source tree first, for a `debian/rules` that cannot cross-build as
+is. git needs both:
+
+```yaml
+    with:
+      cross-archs: arm64
+      cross-build-depends: >-
+        libz-dev libpcre2-dev libcurl4-gnutls-dev libexpat1-dev
+      # debian/rules sets CC = gcc; dpkg's buildtools.mk gives the cross one.
+      cross-prepare: |
+        grep -qx 'CC =gcc' debian/rules
+        sed -i 's|^CC =gcc$|include /usr/share/dpkg/buildtools.mk|' \
+            debian/rules
 ```
 
 `cargo-deb.yaml` packages a Rust program from crates.io that Debian does not
