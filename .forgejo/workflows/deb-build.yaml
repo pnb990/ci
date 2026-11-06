@@ -38,12 +38,17 @@
 # A backport has no `debian/` of its own: the caller gives the URL of a
 # Debian source package (`dsc`) and its sha256, and that package is
 # rebuilt for the image's distribution, under a `~bpo<release>+1` entry.
+# What the backport changes in it is a patch in the caller's repository
+# (`patches`), reviewed as a diff and failing once it no longer applies.
 #
 # `cross-archs` also cross-builds the architecture-dependent packages for
 # other architectures (arm64 for a Raspberry Pi), on this amd64 runner,
 # which has no other: they are built from the same tree once the native ones
 # are built and tested, checked by lintian and by the architecture of every
-# ELF they hold, never run. A package's tests run on the native build only.
+# ELF they hold, never run. A package's tests run on the native build only:
+# the cross build has the `nocheck` profile, so its Build-Depends must be
+# cross-annotated (`:native`, `<!nocheck>`, Multi-Arch), by `patches` when
+# Debian's are not.
 #
 # A dependency outside the image's distribution (a backport, a vendor
 # repository) comes from `apt-sources`, deb822 stanzas whose key, if not
@@ -125,21 +130,13 @@
           for, space separated (`arm64`). Empty builds the runner's only.
         type: string
         default: ""
-      cross-build-depends:
+      patches:
         description: >-
-          With `cross-archs`, the packages to install for the target
-          architecture, space separated (`libz-dev libexpat1-dev`), the
-          native build's dependencies standing for the rest. For a package
-          whose Build-Depends are not cross-annotated (Multi-Arch, `:native`,
-          `<!nocheck>`), which `apt-get build-dep -a` cannot install. Empty
-          uses `apt-get build-dep -a`.
-        type: string
-        default: ""
-      cross-prepare:
-        description: >-
-          With `cross-archs`, a shell script run in the source tree before
-          the cross builds, for a debian/rules that cannot cross-build as is
-          (a hard-coded `CC = gcc`). Printed, then run with `bash -eu`.
+          With `dsc`, a directory of the caller's repository whose `*.patch`
+          files are applied to the extracted source, in name order, with
+          `patch -p1`, before any build: Debian's packaging as the backport
+          changes it (Build-Depends cross-annotated, a debian/rules that
+          cross-builds). A package with its own `debian/` changes it there.
         type: string
         default: ""
 
@@ -217,6 +214,32 @@ jobs:
               --distribution "${VERSION_CODENAME}-backports" --force-distribution \
               "Rebuild for ${VERSION_CODENAME}-backports."
 
+      # Only for the patches: a backport builds Debian's tree, not the
+      # caller's.
+      - name: Checkout the patches
+        if: inputs.dsc != '' && inputs.patches != ''
+        uses: actions/checkout@v6
+        with:
+          path: caller
+
+      # --forward: a patch already applied upstream fails rather than being
+      # reverted; any failure stops the job, the bump is what needs fixing.
+      - name: Apply the patches
+        if: inputs.dsc != '' && inputs.patches != ''
+        working-directory: source
+        env:
+          PATCHES: ${{ inputs.patches }}
+        run: |
+          set -- ../caller/"$PATCHES"/*.patch
+          if [ ! -f "$1" ]; then
+              echo "::error::no *.patch in $PATCHES"
+              exit 1
+          fi
+          for p in "$@"; do
+              echo "applying ${p#../caller/}"
+              patch -p1 --forward --batch < "$p"
+          done
+
       # `build-dep ./` reads the Build-Depends of the checked-out
       # debian/control: no deb-src line needed, and nothing package-specific
       # in the image.
@@ -278,10 +301,10 @@ jobs:
 
       # After the native build and its tests, from the same tree, whose
       # `clean` the cross build runs first. `-B`: the `all` packages are the
-      # native build's. `nocheck`: the runner cannot run the target's code,
-      # so the check is that every ELF has the machine of an object the
-      # cross compiler builds, then lintian. The inputs come through the
-      # environment, as `apt-sources` does.
+      # native build's. `nocheck`, option and profile: the runner cannot run
+      # the target's code, so the check is that every ELF has the machine of
+      # an object the cross compiler builds, then lintian. The inputs come
+      # through the environment, as `apt-sources` does.
       - name: Cross-build
         if: inputs.cross-archs != ''
         working-directory: source
@@ -289,14 +312,8 @@ jobs:
         shell: bash
         env:
           CROSS_ARCHS: ${{ inputs.cross-archs }}
-          CROSS_BUILD_DEPENDS: ${{ inputs.cross-build-depends }}
-          CROSS_PREPARE: ${{ inputs.cross-prepare }}
           FAIL_ON: ${{ inputs.lintian-fail-on }}
         run: |
-          if [ -n "$CROSS_PREPARE" ]; then
-              printf '%s\n' "$CROSS_PREPARE"
-              bash -eu -c "$CROSS_PREPARE"
-          fi
           for arch in $CROSS_ARCHS; do
               dpkg --add-architecture "$arch"
           done
@@ -304,17 +321,9 @@ jobs:
           for arch in $CROSS_ARCHS; do
               gnu=$(dpkg-architecture -a "$arch" -qDEB_HOST_GNU_TYPE)
               apt-get install -y --no-install-recommends "crossbuild-essential-$arch"
-              if [ -n "$CROSS_BUILD_DEPENDS" ]; then
-                  # shellcheck disable=SC2086 # one word per package
-                  apt-get install -y --no-install-recommends \
-                      $(printf "%s:$arch " $CROSS_BUILD_DEPENDS)
-                  nodeps=-d
-              else
-                  apt-get build-dep -y -a "$arch" ./
-                  nodeps=
-              fi
+              apt-get build-dep -y -a "$arch" -P nocheck ./
               DEB_BUILD_OPTIONS="nocheck${DEB_BUILD_OPTIONS:+ $DEB_BUILD_OPTIONS}" \
-                  dpkg-buildpackage -us -uc -B -a "$arch" $nodeps
+                  dpkg-buildpackage -us -uc -B -a "$arch" -P nocheck
 
               ref=$(mktemp -d)
               echo 'int main(void) { return 0; }' | "$gnu-gcc" -x c - -o "$ref/ref"
