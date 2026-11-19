@@ -77,6 +77,7 @@ there and rolling it back is a `git revert` there.
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 | `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`, `patches`, `cross-archs`; secret `PACKAGE_TOKEN` |
+| `python-publish.yaml` | — | `image` (required); secret `PACKAGE_TOKEN` |
 | `cargo-deb.yaml` | — | `image`, `crate`, `crate-sha256` (required), `targets`, `test-command`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
@@ -256,6 +257,23 @@ jobs:
       crate: defmt-print
       crate-sha256: <cksum of the version in crates.io's index>
       test-command: defmt-print --version
+    secrets:
+      PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+```
+
+`python-publish.yaml` builds a Python package's sdist and wheel with `uv
+build`, from its `pyproject.toml`, and uploads them as `<name>-dist`. On a
+`v*` tag equal to `v` + the `pyproject.toml` version, it publishes them to the
+owner's PyPI registry with `uv publish`; a file already published is skipped
+with a notice, never replaced. The image is `pnb990/python3:ci-<sha>`, and the
+caller passes the token as for deb-build:
+
+```yaml
+jobs:
+  python-publish:
+    uses: soft-lib/ci/.forgejo/workflows/python-publish.yaml@<sha>
+    with:
+      image: pnb990/python3:ci-<sha>
     secrets:
       PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
 ```

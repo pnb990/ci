@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Builds the sdist and wheel of a Python package, and on a release tag
+# publishes them to the owner's PyPI registry on this forge.
+#
+# As in deb-build.yaml, the package already describes itself: name, version
+# and build backend are in its `pyproject.toml`. So the only input is the
+# image, the `python3:ci` of soft-lib/docker-images, which has uv. The build
+# runs on every push, so a broken packaging shows before the tag.
+#
+# Publishing happens only on a `v*` tag, which is the caller's trigger to
+# decide, and needs the PACKAGE_TOKEN secret (write:package on the owner),
+# passed by the calling job: see deb-build.yaml for why it is not declared
+# here. The registry is per owner and a published file is immutable, so the
+# tag must be `v` + the `pyproject.toml` version, and a new build is a new
+# version, never a re-pushed tag.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image, pinned to a commit tag:
+          `pnb990/python3:ci-<sha>`. Stays in the calling project: a pin is a
+          commit in the repository it protects.
+        type: string
+        required: true
+
+jobs:
+  python-publish:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+
+    steps:
+      - name: Image provenance
+        run: |
+          cat /etc/image-info 2>/dev/null \
+            || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # The name normalised as PEP 503 does, which is how the registry stores
+      # it and how its download URLs spell it.
+      - name: Build
+        id: build
+        run: |
+          uv build --out-dir dist
+          ls -l dist
+          python3 - >> "$FORGEJO_OUTPUT" <<'EOF'
+          import re
+          import tomllib
+          with open("pyproject.toml", "rb") as f:
+              project = tomllib.load(f)["project"]
+          print("name=" + re.sub(r"[-_.]+", "-", project["name"]).lower())
+          print("version=" + project["version"])
+          EOF
+
+      # Forgejo's fork: GitHub's own upload-artifact refuses to run off
+      # github.com (see fw-build.yaml).
+      - name: Upload artifact
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v5
+        with:
+          name: ${{ steps.build.outputs.name }}-dist
+          path: dist/*
+          if-no-files-found: error
+
+      # A file already in the registry is skipped with a notice, as deb-build
+      # does on its 409: a re-run of the tag's job is not an error, and a
+      # published file is never replaced. The registry takes the token as the
+      # basic-auth password, whatever the user name.
+      - name: Publish to the PyPI registry
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REGISTRY: ${{ github.server_url }}/api/packages/${{ github.repository_owner }}/pypi
+          TAG: ${{ github.ref_name }}
+          NAME: ${{ steps.build.outputs.name }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+              echo "::error::tag $TAG does not match pyproject.toml version $VERSION"
+              exit 1
+          fi
+          if [ -z "$PACKAGE_TOKEN" ]; then
+              echo "::error::release tag but no PACKAGE_TOKEN secret passed by the caller"
+              exit 1
+          fi
+          new=""
+          for file in dist/*; do
+              status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+                  --header "Authorization: token ${PACKAGE_TOKEN}" \
+                  "${REGISTRY}/files/${NAME}/${VERSION}/$(basename "$file")")
+              case "$status" in
+                  200) echo "::notice::$(basename "$file") already published; bump the version to publish a new build" ;;
+                  404) new="$new $file" ;;
+                  *) echo "::error::$(basename "$file"): registry check failed, HTTP ${status}"; exit 1 ;;
+              esac
+          done
+          if [ -n "$new" ]; then
+              # shellcheck disable=SC2086 # one word per file
+              UV_PUBLISH_USERNAME="$OWNER" UV_PUBLISH_PASSWORD="$PACKAGE_TOKEN" \
+                  uv publish --publish-url "$REGISTRY" $new
+          fi
