@@ -65,6 +65,13 @@
           a commit in the repository it protects.
         type: string
         required: true
+      submodules:
+        description: >-
+          Passed to actions/checkout for the caller's own tree: `true` (or
+          `recursive`) when the package ships code vendored as a submodule.
+          Ignored with `dsc`.
+        type: string
+        default: "false"
       dsc:
         description: >-
           URL of a Debian source package to backport instead of the caller's
@@ -181,6 +188,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: source
+          submodules: ${{ inputs.submodules }}
 
       # dpkg-source checks the tarballs against the .dsc, the .dsc is checked
       # against the caller's pin; its signature is not checked, as the image
