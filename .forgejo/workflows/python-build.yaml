@@ -49,24 +49,18 @@ jobs:
       # pass when the published package would not install elsewhere.
       # Name and version come from the built wheel, not pyproject.toml: they
       # may be dynamic (hatch-vcs, setuptools-scm), and the wheel is what gets
-      # published. The name is normalised as PEP 503 does.
+      # published. Its file name is {name}-{version}-{tags}.whl, both fields
+      # normalised by the binary distribution format: no need to open it. The
+      # name is turned back into its PEP 503 form.
       - name: Build
         id: build
         run: |
           uv build --no-sources --out-dir dist
           ls -l dist
-          python3 - dist/*.whl >> "$FORGEJO_OUTPUT" <<'EOF'
-          import email.parser
-          import re
-          import sys
-          import zipfile
-          with zipfile.ZipFile(sys.argv[1]) as wheel:
-              path = next(n for n in wheel.namelist()
-                          if re.fullmatch(r"[^/]+\.dist-info/METADATA", n))
-              meta = email.parser.BytesHeaderParser().parsebytes(wheel.read(path))
-          print("name=" + re.sub(r"[-_.]+", "-", meta["Name"]).lower())
-          print("version=" + meta["Version"])
-          EOF
+          wheel=$(basename dist/*.whl)
+          version=${wheel#*-}
+          echo "name=$(echo "${wheel%%-*}" | tr _A-Z -a-z)" >> "$FORGEJO_OUTPUT"
+          echo "version=${version%%-*}" >> "$FORGEJO_OUTPUT"
 
       # A published version is immutable: a wheel that does not install
       # (broken dependency, wrong Requires-Python) must fail here, not burn
