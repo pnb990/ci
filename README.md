@@ -263,8 +263,10 @@ jobs:
 
 `python-build.yaml` builds a Python package's sdist and wheel with `uv build
 --no-sources`, from its `pyproject.toml`, and uploads them as `<name>-dist`.
-Only pure-Python wheels are built: there is no matrix of platform wheels. On a
-`v*` tag equal to `v` + the package version (read from the built wheel, so a
+There is no matrix of platform wheels: a package with a compiled extension
+gets one wheel, for the image's architecture and glibc, and pip falls back to
+the sdist elsewhere. The wheel is then installed in an empty venv, so one that
+does not install fails before it is published. On a `v*` tag equal to `v` + the package version (read from the built wheel, so a
 dynamic version works), it publishes them to the owner's PyPI registry with
 `uv publish --check-url`: a file already published with the same hash is
 skipped, one with a different hash fails, and none is ever replaced. The image

@@ -68,6 +68,15 @@ jobs:
           print("version=" + meta["Version"])
           EOF
 
+      # A published version is immutable: a wheel that does not install
+      # (broken dependency, wrong Requires-Python) must fail here, not burn
+      # its version on the registry. An empty venv, as a user would have.
+      - name: Install check
+        run: |
+          venv="$(mktemp -d)/venv"
+          uv venv "$venv"
+          uv pip install --python "$venv" dist/*.whl
+
       # Forgejo's fork: GitHub's own upload-artifact refuses to run off
       # github.com (see fw-build.yaml).
       - name: Upload artifact
