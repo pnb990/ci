@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: 2026 Pierre-Noel Bouteville <pnb990@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+---
+
+# Builds the sdist and wheel of a Python package, and on a release tag
+# publishes them to the owner's PyPI registry on this forge.
+#
+# As in deb-build.yaml, the package already describes itself: name, version
+# and build backend are in its `pyproject.toml`. So the only input is the
+# image, the `python3:ci` of soft-lib/docker-images, which has uv. The build
+# runs on every push, so a broken packaging shows before the tag.
+#
+# Publishing happens only on a `v*` tag, which is the caller's trigger to
+# decide, and needs the PACKAGE_TOKEN secret (write:package on the owner),
+# passed by the calling job: see deb-build.yaml for why it is not declared
+# here. The registry is per owner and a published file is immutable, so the
+# tag must be `v` + the package version, and a new build is a new version,
+# never a re-pushed tag.
+
+"on":
+  workflow_call:
+    inputs:
+      image:
+        description: >-
+          Full reference of the image, pinned to a commit tag:
+          `pnb990/python3:ci-<sha>`. Stays in the calling project: a pin is a
+          commit in the repository it protects.
+        type: string
+        required: true
+
+jobs:
+  python-build:
+    runs-on: debian
+    container:
+      image: ${{ inputs.image }}
+
+    steps:
+      - name: Image provenance
+        run: |
+          cat /etc/image-info 2>/dev/null \
+            || echo "no /etc/image-info: pin not bumped with the rename, or image older than the stamp"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # --no-sources: a [tool.uv.sources] override must not make the CI build
+      # pass when the published package would not install elsewhere.
+      # Name and version come from the built wheel, not pyproject.toml: they
+      # may be dynamic (hatch-vcs, setuptools-scm), and the wheel is what gets
+      # published. Its file name is {name}-{version}-{tags}.whl, both fields
+      # normalised by the binary distribution format: no need to open it. The
+      # name is turned back into its PEP 503 form.
+      - name: Build
+        id: build
+        run: |
+          uv build --no-sources --out-dir dist
+          ls -l dist
+          wheel=$(basename dist/*.whl)
+          version=${wheel#*-}
+          echo "name=$(echo "${wheel%%-*}" | tr _A-Z -a-z)" >> "$FORGEJO_OUTPUT"
+          echo "version=${version%%-*}" >> "$FORGEJO_OUTPUT"
+
+      # A published version is immutable: a wheel that does not install
+      # (broken dependency, wrong Requires-Python) must fail here, not burn
+      # its version on the registry. An empty venv, as a user would have.
+      - name: Install check
+        run: |
+          venv="$(mktemp -d)/venv"
+          uv venv "$venv"
+          uv pip install --python "$venv" dist/*.whl
+
+      # Forgejo's fork: GitHub's own upload-artifact refuses to run off
+      # github.com (see fw-build.yaml).
+      - name: Upload artifact
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v5
+        with:
+          name: ${{ steps.build.outputs.name }}-dist
+          path: dist/*
+          if-no-files-found: error
+
+      # --check-url skips a file already in the registry with the same hash,
+      # so a re-run of the tag's job is not an error, and fails on a different
+      # hash: a published file is never replaced. The registry takes the token
+      # as the basic-auth password, whatever the user name.
+      - name: Publish to the PyPI registry
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REGISTRY: ${{ github.server_url }}/api/packages/${{ github.repository_owner }}/pypi
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+              echo "::error::tag $TAG does not match package version $VERSION"
+              exit 1
+          fi
+          if [ -z "$PACKAGE_TOKEN" ]; then
+              echo "::error::release tag but no PACKAGE_TOKEN secret passed by the caller"
+              exit 1
+          fi
+          UV_PUBLISH_USERNAME="$OWNER" UV_PUBLISH_PASSWORD="$PACKAGE_TOKEN" \
+              uv publish --publish-url "$REGISTRY" --check-url "$REGISTRY/simple" dist/*

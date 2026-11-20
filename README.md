@@ -77,6 +77,7 @@ there and rolling it back is a `git revert` there.
 | `markdown-lint.yaml` | `markdown-lint.yaml` (ACT-Contributing) | `image` (required), `globs`, `submodules` |
 | `fw-build.yaml` | `build-firmware.yaml`, `build-doc.yaml` | `image`, `build` (required), `matrix-value`, `require-matrix`, `submodules`, `uv-sync`, `clang-tidy`, `compile-commands-dir`, `clang-tidy-files`, `artifact-name`, `artifact-path`, `artifact-retention-days` |
 | `deb-build.yaml` | yt-add-music-beet's `deb.yaml` | `image` (required), `submodules`, `dsc`, `dsc-sha256`, `dch-force-bad-version`, `debfullname`, `debemail`, `lintian-fail-on`, `apt-sources`, `apt-preferences`, `patches`, `cross-archs`; secret `PACKAGE_TOKEN` |
+| `python-build.yaml` | — | `image` (required); secret `PACKAGE_TOKEN` |
 | `cargo-deb.yaml` | — | `image`, `crate`, `crate-sha256` (required), `targets`, `test-command`, `lintian-fail-on`; secret `PACKAGE_TOKEN` |
 | `image-fresh.yaml` | — | `image` (required) |
 
@@ -256,6 +257,28 @@ jobs:
       crate: defmt-print
       crate-sha256: <cksum of the version in crates.io's index>
       test-command: defmt-print --version
+    secrets:
+      PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+```
+
+`python-build.yaml` builds a Python package's sdist and wheel with `uv build
+--no-sources`, from its `pyproject.toml`, and uploads them as `<name>-dist`.
+There is no matrix of platform wheels: a package with a compiled extension
+gets one wheel, for the image's architecture and glibc, and pip falls back to
+the sdist elsewhere. The wheel is then installed in an empty venv, so one that
+does not install fails before it is published. On a `v*` tag equal to `v` + the package version (read from the built wheel, so a
+dynamic version works), it publishes them to the owner's PyPI registry with
+`uv publish --check-url`: a file already published with the same hash is
+skipped, one with a different hash fails, and none is ever replaced. The image
+is `pnb990/python3:ci-<sha>`, and the caller passes the token as for
+deb-build:
+
+```yaml
+jobs:
+  python-build:
+    uses: soft-lib/ci/.forgejo/workflows/python-build.yaml@<sha>
+    with:
+      image: pnb990/python3:ci-<sha>
     secrets:
       PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
 ```
